@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen – Output</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:">
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+    body { display: grid; place-items: center; }
+    canvas { display: block; grid-area: 1 / 1; }
+    #grid { pointer-events: none; display: none; }
+    #wait {
+      grid-area: 1 / 1; z-index: 2; color: #6b7080; text-align: center; transition: opacity .6s;
+      font: 500 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    }
+    #wait.gone { opacity: 0; pointer-events: none; }
+    #wait b { display: block; color: #aab0c4; font-size: 18px; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <canvas id="grid"></canvas>
+  <div id="wait"><b>Lumen output</b>Waiting for the control window…<br>Double-click for fullscreen.</div>
+  <script type="module" src="js/output.js"></script>
+</body>
+</html>

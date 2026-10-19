@@ -1,0 +1,14 @@
+{
+  "name": "lumen",
+  "version": "1.0.0",
+  "description": "Live visuals: draw and play on your laptop, show the result on the beamer.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "web": "node server.js"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  }
+}
