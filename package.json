@@ -9,6 +9,8 @@
     "web": "node server.js"
   },
   "devDependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/cli": "^2.12.3",
     "electron": "^38.0.0"
   }
 }

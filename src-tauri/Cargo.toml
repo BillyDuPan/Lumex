@@ -1,0 +1,54 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.3" }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.4", features = ["unstable"] }
+tauri-plugin-log = "2"
+wgpu = "23"
+bytemuck = { version = "1.19", features = ["derive"] }
+pollster = "0.4"
+raw-window-handle = "0.6"
+naga = { version = "23", features = ["wgsl-in"] }
+cpal = "0.18.2"
+realfft = "3.5.0"
+rtrb = "0.4.0"
+midir = "0.11.1"
+
+[[bench]]
+name = "benchmark_frame_timing"
+harness = false
+
+[target.'cfg(target_os = "windows")'.dependencies]
+spout-rs = { version = "0.2", features = ["vendored"] }
+windows = { version = "0.58", features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Foundation",
+    "Win32_Security",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+syphon-wgpu = "0.4"
+
+
