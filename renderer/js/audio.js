@@ -20,7 +20,7 @@ export const audioState = {
   clip: false, // post-gain input peaked at full scale recently (the level itself is levels[LEVEL.input])
 };
 
-const bridge = window.lumen || null;
+import { bridge } from './bridge.js';
 const spec = new Float32Array(FFT / 2);
 const wav = new Float32Array(FFT);
 const lo = new Int32Array(3);

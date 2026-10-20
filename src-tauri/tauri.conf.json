@@ -7,8 +7,10 @@
     "frontendDist": "../renderer"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "Lumex Pro - Control",
         "url": "control.html",
         "width": 1480,

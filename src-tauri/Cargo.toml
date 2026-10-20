@@ -1,7 +1,7 @@
 [package]
-name = "app"
-version = "0.1.0"
-description = "A Tauri App"
+name = "Lumex"
+version = "1.0.0"
+description = "Lumex Pro - Live Creative Visual Performance Instrument"
 authors = ["you"]
 license = ""
 repository = ""
@@ -14,8 +14,12 @@ rust-version = "1.90"
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "Lumex"
+path = "src/main.rs"
+
 [build-dependencies]
-tauri-build = { version = "2.7.3" }
+tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
 serde_json = "1.0"
@@ -49,6 +53,5 @@ windows = { version = "0.58", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-syphon-wgpu = "0.4"
-
-
+objc = "0.2"
+core-foundation = "0.10"

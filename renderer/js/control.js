@@ -11,7 +11,7 @@ import { clamp, uid } from './util.js';
 import { getAllMedia, getMediaAsset, saveUserMedia, deleteUserMedia, loadUserMedia, getImage } from './media.js';
 
 const $ = (id) => document.getElementById(id);
-const bridge = window.lumen || null; // set by preload.js inside Electron
+import { bridge } from './bridge.js';
 const link = openLink();
 
 loadUserMedia();
