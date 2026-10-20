@@ -1,19 +1,20 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Lumex",
-  "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "version": "1.0.0",
+  "identifier": "com.lumex.visuals",
   "build": {
-    "frontendDist": "../renderer",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "frontendDist": "../renderer"
   },
   "app": {
     "windows": [
       {
         "title": "Lumex Pro - Control",
-        "width": 800,
-        "height": 600,
+        "url": "control.html",
+        "width": 1480,
+        "height": 920,
+        "minWidth": 1000,
+        "minHeight": 640,
         "resizable": true,
         "fullscreen": false
       }
@@ -31,9 +32,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "android": {
-      "debugApplicationIdSuffix": ".debug"
-    }
+    ]
   }
 }
