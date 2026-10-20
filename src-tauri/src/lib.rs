@@ -30,6 +30,12 @@ pub fn run() {
         }
       }
 
+      // Explicitly reveal and focus the control window on desktop launch
+      if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.show();
+        let _ = main_win.set_focus();
+      }
+
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![

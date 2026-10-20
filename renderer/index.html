@@ -1,11 +1,135 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="refresh" content="0; url=control.html">
-  <title>Lumex</title>
+  <title>Lumex Pro – Creative Visual Suite</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' ipc: tauri: http: https: blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ipc: tauri: http: https: ws: wss: blob: data:;">
+  <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-  <script>location.href = 'control.html';</script>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="adobe-badge">Lx</span>
+        <span class="brand-name">Lumex</span>
+        <span class="brand-tag">PRO</span>
+      </div>
+      <div class="topbar-status-group">
+        <div class="status monitor-status" id="status" title="Output monitor status"><i></i><span>Output closed</span></div>
+        <div class="status pill" id="audioStatus" title="Audio input · click to open"><i></i><span>Audio off</span></div>
+        <div class="status scene-status" id="activeScenePill" title="Active scene · click to manage">
+          <span class="live-dot"></span>
+          <span class="scene-lbl">Lava lamp</span>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div id="topActions" class="top-actions"></div>
+    </header>
+
+    <main class="layout">
+      <!-- Left Vertical Toolbar (Adobe Style) -->
+      <aside class="left-toolbar" id="leftToolbar"></aside>
+
+      <section class="stage-col">
+        <div class="stage" id="stage">
+          <div class="frame" id="frame">
+            <canvas id="gl"></canvas>
+            <div class="cursor" id="cursor"></div>
+            <div class="monitor-hud">
+              <span class="hud-res" id="hudRes">1280×720</span>
+              <span class="hud-fps" id="hudFps">60 FPS</span>
+            </div>
+            <div class="badge" id="blackBadge">Blackout</div>
+          </div>
+        </div>
+        <!-- Bottom Panel: Central Beat Clock & Scene Timeline Selector -->
+        <section class="bottom-panel" id="bottomPanel"></section>
+      </section>
+
+      <aside class="side">
+        <nav class="tabs" id="tabs"></nav>
+        <div class="panel" id="panel"></div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="mediaModal" hidden>
+    <div class="media-card">
+      <div class="media-head">
+        <h2>Media Library</h2>
+        <div class="media-tabs" id="mediaTabs">
+          <button class="m-tab on" data-cat="all">All</button>
+          <button class="m-tab" data-cat="sacred">Sacred</button>
+          <button class="m-tab" data-cat="cosmic">Cosmic</button>
+          <button class="m-tab" data-cat="organic">Bio</button>
+          <button class="m-tab" data-cat="user">My Library</button>
+        </div>
+        <button class="mini-btn close-x" id="mediaClose" title="Close">&times;</button>
+      </div>
+      <div class="media-bar">
+        <label class="btn primary import-btn">
+          <span>+ Import Image…</span>
+          <input type="file" id="mediaFileInput" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif" hidden>
+        </label>
+        <span class="media-hint">PNG, JPG, WebP, SVG, GIF · Drag & drop anywhere</span>
+      </div>
+      <div class="media-body">
+        <div class="media-grid" id="mediaGrid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scene Editor Modal -->
+  <div class="modal-backdrop" id="sceneEditModal" hidden>
+    <div class="scene-editor-card">
+      <div class="scene-editor-head">
+        <div class="scene-editor-title">
+          <span class="scene-editor-icon">&#9881;</span>
+          <h2>Edit Scene</h2>
+        </div>
+        <button class="mini-btn close-x" id="sceneEditClose" title="Close">&times;</button>
+      </div>
+      <div class="scene-editor-body" id="sceneEditBody"></div>
+    </div>
+  </div>
+
+  <!-- Import Scene hidden input -->
+  <input type="file" id="sceneImportInput" accept=".json,application/json" hidden>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <div class="drop-overlay" id="dropOverlay" hidden>
+    <div class="drop-box">
+      <div class="drop-icon">&#10515;</div>
+      <b>Drop image to import</b>
+      <span>Adds to Media Library & applies to current layer</span>
+    </div>
+  </div>
+
+  <div class="help" id="help" hidden>
+    <div class="help-card">
+      <h2>Shortcuts</h2>
+      <dl>
+        <dt>D · E · P</dt><dd>Draw · Erase · Pointer only</dd>
+        <dt>[ &nbsp;]</dt><dd>Brush smaller / bigger</dd>
+        <dt>C</dt><dd>Clear current drawing (⇧C clears all)</dd>
+        <dt>K</dt><dd>Kaleidoscope on / off</dd>
+        <dt>L</dt><dd>All LFOs on / off</dd>
+        <dt>A</dt><dd>Audio input on / off</dd>
+        <dt>Space</dt><dd>Pause / resume</dd>
+        <dt>B</dt><dd>Blackout</dd>
+        <dt>V</dt><dd>Preview: final / source</dd>
+        <dt>O</dt><dd>Open / close output window</dd>
+        <dt>F</dt><dd>Output fullscreen</dd>
+        <dt>1 – 9</dt><dd>Recall scene</dd>
+      </dl>
+      <p>Drawing while the kaleidoscope is on: you draw on the picture you see, the mirrored copies appear around the centre. The wave button next to a slider makes it swing by itself (LFO) or follow the music (Bass, Mid, High, Beat).</p>
+      <button class="btn primary" id="helpClose">Got it</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/control.js"></script>
 </body>
 </html>

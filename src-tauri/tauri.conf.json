@@ -12,13 +12,16 @@
       {
         "label": "main",
         "title": "Lumex Pro - Control",
-        "url": "control.html",
+        "url": "index.html",
         "width": 1480,
         "height": 920,
         "minWidth": 1000,
         "minHeight": 640,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "center": true,
+        "focus": true,
+        "visible": true
       }
     ],
     "security": {
