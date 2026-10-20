@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Lumen – Control</title>
+  <title>Lumex Pro – Creative Visual Suite</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:">
   <link rel="stylesheet" href="css/app.css">
@@ -10,23 +10,41 @@
 <body>
   <div id="app">
     <header class="topbar">
-      <div class="brand"><span class="mark"></span>Lumen</div>
-      <div class="status" id="status"><i></i><span>Output closed</span></div>
-      <div class="status pill" id="audioStatus" title="Audio input · click to open"><i></i><span>Audio off</span></div>
+      <div class="brand">
+        <span class="adobe-badge">Lx</span>
+        <span class="brand-name">Lumex</span>
+        <span class="brand-tag">PRO</span>
+      </div>
+      <div class="topbar-status-group">
+        <div class="status monitor-status" id="status" title="Output monitor status"><i></i><span>Output closed</span></div>
+        <div class="status pill" id="audioStatus" title="Audio input · click to open"><i></i><span>Audio off</span></div>
+        <div class="status scene-status" id="activeScenePill" title="Active scene · click to manage">
+          <span class="live-dot"></span>
+          <span class="scene-lbl">Lava lamp</span>
+        </div>
+      </div>
       <div class="spacer"></div>
       <div id="topActions" class="top-actions"></div>
     </header>
 
     <main class="layout">
+      <!-- Left Vertical Toolbar (Adobe Style) -->
+      <aside class="left-toolbar" id="leftToolbar"></aside>
+
       <section class="stage-col">
         <div class="stage" id="stage">
           <div class="frame" id="frame">
             <canvas id="gl"></canvas>
             <div class="cursor" id="cursor"></div>
+            <div class="monitor-hud">
+              <span class="hud-res" id="hudRes">1280×720</span>
+              <span class="hud-fps" id="hudFps">60 FPS</span>
+            </div>
             <div class="badge" id="blackBadge">Blackout</div>
           </div>
         </div>
-        <div class="dock" id="dock"></div>
+        <!-- Bottom Panel: Central Beat Clock & Scene Timeline Selector -->
+        <section class="bottom-panel" id="bottomPanel"></section>
       </section>
 
       <aside class="side">
@@ -61,6 +79,26 @@
       </div>
     </div>
   </div>
+
+  <!-- Scene Editor Modal -->
+  <div class="modal-backdrop" id="sceneEditModal" hidden>
+    <div class="scene-editor-card">
+      <div class="scene-editor-head">
+        <div class="scene-editor-title">
+          <span class="scene-editor-icon">&#9881;</span>
+          <h2>Edit Scene</h2>
+        </div>
+        <button class="mini-btn close-x" id="sceneEditClose" title="Close">&times;</button>
+      </div>
+      <div class="scene-editor-body" id="sceneEditBody"></div>
+    </div>
+  </div>
+
+  <!-- Import Scene hidden input -->
+  <input type="file" id="sceneImportInput" accept=".json,application/json" hidden>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container"></div>
 
   <div class="drop-overlay" id="dropOverlay" hidden>
     <div class="drop-box">

@@ -4,7 +4,7 @@ import { openLink } from './link.js';
 import { LAYER_TYPES, BLENDS, makeLayerConfig, layerRanges } from './layers.js';
 import { FX_GROUPS, FX_DEFAULTS, FX_RANGES, FxState } from './fx.js';
 import { BUILTIN_PRESETS, presetLayers, presetFxMods, swatchOf, snapshotPreset } from './presets.js';
-import { h, slider, knob, toggle, select, segmented, button, section, updateMarker, ICONS } from './ui.js';
+import { h, slider, knob, toggle, select, segmented, button, section, updateMarker, ICONS, showToast } from './ui.js';
 import { SHAPES, SOURCES, LEVEL, master, levels, newEntry, stepStore, reach, isAudio, releaseTau } from './mod.js';
 import { audioCfg, audioState, onAudioChange, startAudio, stopAudio, setGain, updateAudio, refreshDevices, micHelp, audioInputNode, audioContext } from './audio.js';
 import { clamp, uid } from './util.js';
@@ -36,10 +36,28 @@ const config = { bg: BUILTIN_PRESETS[0].bg, layers: [] };
 const brush = { tool: 'draw', style: 'neon', color: '#ff2d95', rainbow: false, size: 14, vanishPos: 0, layerId: null, ...saved.brush };
 const settings = {
   aspectMode: 'auto', aspect: 16 / 9, outH: 720, testPattern: false, display: null, glide: 2, view: 'final',
-  auto: false, autoEvery: 45, ...saved.settings,
+  auto: false, autoEvery: 45, autoMode: 'sequence', autoBeats: 32, autoPaused: false,
+  sceneViewMode: 'grid', sceneFilter: 'all', ...saved.settings,
 };
 let userPresets = saved.presets || [];
 let selectedId = null;
+let activeSceneId = BUILTIN_PRESETS[0].id;
+let sceneIdx = -1;
+let autoT = 0;
+let beatCount = 0;
+let lastBeatDetectTime = 0;
+let sceneSearchQuery = '';
+// Central Beat Clock & Sequencer State
+const clock = {
+  bpm: saved.settings?.bpm || 124.0,
+  taps: [],
+  phase: 0,
+  beatInBar: 0,
+  loopLength: saved.settings?.loopLength || 32,
+  loopBeat: 0,
+  source: saved.settings?.clockSource || 'tap', // 'tap' | 'audio'
+};
+
 let aspect = settings.aspectMode === 'auto' ? 16 / 9 : settings.aspect;
 Object.assign(master, saved.lfo);
 Object.assign(audioCfg, saved.audio);
@@ -140,12 +158,14 @@ function moveLayer(id, dir) {
   commitStructure();
 }
 
-let sceneIdx = -1;
-let autoT = 0;
-const allPresets = () => [...BUILTIN_PRESETS, ...userPresets];
+const allPresets = () => {
+  const userMap = new Map(userPresets.map((p) => [p.name, p]));
+  const builtins = BUILTIN_PRESETS.filter((bp) => !userMap.has(bp.name));
+  return [...builtins, ...userPresets];
+};
 
 function applyPreset(p) {
-  const glide = settings.glide;
+  const glide = (p.glide != null && p.glide >= 0) ? p.glide : settings.glide;
   if (glide > 0.15) {
     link.send({ type: 'xfade', dur: glide });
     scene.crossfade(glide);
@@ -163,11 +183,15 @@ function applyPreset(p) {
   if (!('speed' in p.fx)) delete vals.speed;
   fx.set(vals, Math.max(0.05, glide * 0.6));
   fx.mods = presetFxMods(p);
-  sceneIdx = allPresets().indexOf(p);
+  activeSceneId = p.id;
+  sceneIdx = allPresets().findIndex((x) => x.id === p.id || x.name === p.name);
+  if (sceneIdx === -1) sceneIdx = 0;
   autoT = 0;
   selectedId = null;
   commitStructure();
   renderFx();
+  renderScenes();
+  updateTopSceneBadge();
 }
 
 /* ------------------------------------------------------------- output link */
@@ -446,10 +470,8 @@ function frame(now) {
   for (const m of markers[activeTab] || []) updateMarker(m, reach);
   for (const m of meters[activeTab] || []) m.tick();
   tickAudioDot();
-  if (settings.auto && (autoT += dt) >= settings.autoEvery) {
-    const all = allPresets();
-    applyPreset(all[(sceneIdx + 1) % all.length]);
-  }
+  tickAutoCycle(dt);
+  updateMonitorHud();
 
   blackBadge.classList.toggle('show', fx.blackTarget > 0.5);
   if (out.connected && now - out.last > 3000) { out.connected = false; renderTopActions(); renderOutput(); }
@@ -516,25 +538,76 @@ function clearCurrent(all) {
 
 let toolSeg, styleSeg, sizeSlider, vanishSlider, swatchEls;
 
+function makeScrubControl(label, val, min, max, step, unit, onCommit, fmt) {
+  const lbl = h('span', { class: 'tool-scrub-lbl' }, label);
+  const out = h('div', { class: 'tool-scrub-val', title: 'Click to type · Drag up/down' }, fmt ? fmt(val) : `${val}${unit ? ' ' + unit : ''}`);
+  let cur = val;
+
+  let drag = null;
+  out.addEventListener('pointerdown', (e) => {
+    out.setPointerCapture(e.pointerId);
+    drag = { y: e.clientY, v: cur };
+    e.preventDefault();
+  });
+  out.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dy = drag.y - e.clientY;
+    const speed = e.shiftKey ? 0.2 : 1;
+    let nv = drag.v + Math.round(dy * speed * step);
+    nv = Math.max(min, Math.min(max, nv));
+    cur = nv;
+    out.textContent = fmt ? fmt(cur) : `${cur}${unit ? ' ' + unit : ''}`;
+    onCommit(cur);
+  });
+  out.addEventListener('pointerup', () => { drag = null; });
+
+  out.addEventListener('click', () => {
+    if (out.querySelector('input')) return;
+    const input = h('input', { type: 'number', min, max, step, value: cur, class: 'val-input', style: { width: '40px' } });
+    out.textContent = '';
+    out.append(input);
+    input.focus(); input.select();
+    const commit = () => {
+      let nv = parseFloat(input.value);
+      if (isNaN(nv)) nv = cur;
+      cur = Math.max(min, Math.min(max, nv));
+      out.textContent = fmt ? fmt(cur) : `${cur}${unit ? ' ' + unit : ''}`;
+      onCommit(cur);
+    };
+    input.addEventListener('keydown', (ke) => { ke.stopPropagation(); if (ke.key === 'Enter') commit(); else if (ke.key === 'Escape') out.textContent = fmt ? fmt(cur) : `${cur}${unit ? ' ' + unit : ''}`; });
+    input.addEventListener('blur', commit);
+  });
+
+  return h('div', { class: 'tool-scrub' }, lbl, out);
+}
+
 function renderDock() {
-  const dock = $('dock');
-  dock.replaceChildren();
+  const bar = $('leftToolbar') || $('dock');
+  if (!bar) return;
+  bar.replaceChildren();
 
-  toolSeg = segmented({
-    options: [['draw', 'Draw', 'D'], ['erase', 'Erase', 'E'], ['interact', 'Pointer', 'P · move things without drawing']],
-    value: brush.tool, onChange: (v) => setTool(v),
-  });
-  styleSeg = segmented({
-    options: [['pen', 'Pen'], ['neon', 'Neon'], ['soft', 'Soft']], value: brush.style,
-    onChange: (v) => { brush.style = v; touch(); },
-  });
+  // Tool buttons
+  const mkTool = (t, label, icon, kbd) => h('button', {
+    class: `tool-btn${brush.tool === t ? ' on' : ''}`,
+    title: `${label} (${kbd})`,
+    onclick: () => setTool(t)
+  }, h('span', { html: icon }), h('span', {}, label), h('kbd', {}, kbd));
 
-  const drawSel = select({
-    options: drawLayers().map((l) => [l.id, l.name]), value: brush.layerId,
-    onChange: (v) => { brush.layerId = v; touch(); renderLayers(); },
-  });
-  drawSel.sel.title = 'Draw on layer';
+  const toolGroup = h('div', { class: 'tool-group' },
+    mkTool('draw', 'Draw', ICONS.pencil, 'D'),
+    mkTool('erase', 'Erase', ICONS.trash, 'E'),
+    mkTool('interact', 'Move', ICONS.screen, 'P')
+  );
 
+  // Brush style buttons
+  const styleBtns = ['pen', 'neon', 'soft'].map(s => h('button', {
+    class: `style-btn${brush.style === s ? ' on' : ''}`,
+    title: s.charAt(0).toUpperCase() + s.slice(1),
+    onclick: () => { brush.style = s; for (const b of styleGroup.children) b.classList.toggle('on', b.textContent.toLowerCase() === s); touch(); }
+  }, s.charAt(0).toUpperCase() + s.slice(1)));
+  const styleGroup = h('div', { class: 'tool-group' }, ...styleBtns);
+
+  // Swatches & Custom Picker
   swatchEls = SWATCHES.map((c) => h('button', {
     class: 'sw', style: { background: c }, title: c,
     onclick: () => { brush.color = c; brush.rainbow = false; if (brush.tool === 'erase') setTool('draw'); paintSwatches(); touch(); },
@@ -544,29 +617,48 @@ function renderDock() {
   const custom = h('label', { class: 'sw custom', title: 'Custom colour' }, picker, h('span'));
   picker.addEventListener('input', () => { brush.color = picker.value; brush.rainbow = false; paintSwatches(); touch(); });
   swatchEls.push(rainbow, custom);
-  dock._rainbow = rainbow; dock._custom = custom;
+  bar._rainbow = rainbow; bar._custom = custom;
+  const swatchGroup = h('div', { class: 'tool-swatches' }, ...swatchEls);
 
-  sizeSlider = slider({
-    label: 'Size', min: 2, max: 140, step: 1, value: brush.size, def: 14, unit: 'px',
-    onInput: (v) => { brush.size = v; updateCursor(); touch(); },
+  // Scrubbers
+  const sizeScrub = makeScrubControl('Size', brush.size, 2, 140, 1, 'px', (v) => {
+    brush.size = v; updateCursor(); touch();
   });
-  vanishSlider = slider({
-    label: 'Vanish', min: 0, max: 100, step: 1, value: brush.vanishPos, def: 0,
-    fmt: (v) => (v === 0 ? 'Never' : (0.5 * Math.pow(60, (v - 1) / 99)).toFixed(1) + 's'),
-    onInput: (v) => { brush.vanishPos = v; touch(); },
-  });
+  const vanishScrub = makeScrubControl('Vanish', brush.vanishPos, 0, 100, 1, '', (v) => {
+    brush.vanishPos = v; touch();
+  }, (v) => (v === 0 ? 'Never' : (0.5 * Math.pow(60, (v - 1) / 99)).toFixed(1) + 's'));
 
-  dock.append(
-    h('div', { class: 'block' }, toolSeg.el, styleSeg.el),
-    h('div', { class: 'swatches' }, swatchEls),
-    h('div', { class: 'sliders' }, sizeSlider.el, vanishSlider.el),
-    h('div', { class: 'block', style: { minWidth: '130px' } }, drawSel.el),
+  // Layer Selector
+  const drawSel = select({
+    options: drawLayers().map((l) => [l.id, l.name]), value: brush.layerId,
+    onChange: (v) => { brush.layerId = v; touch(); renderLayers(); },
+  });
+  drawSel.sel.title = 'Target layer';
+
+  const clearBtn = h('button', {
+    class: 'tool-btn', style: { width: '44px', height: '26px', fontSize: '9px', marginTop: 'auto' },
+    title: 'Clear layer (C)',
+    onclick: () => clearCurrent(false)
+  }, 'Clear', h('kbd', {}, 'C'));
+
+  bar.append(
+    toolGroup,
+    h('div', { class: 'tool-divider' }),
+    styleGroup,
+    h('div', { class: 'tool-divider' }),
+    swatchGroup,
+    h('div', { class: 'tool-divider' }),
+    sizeScrub,
+    vanishScrub,
+    h('div', { class: 'tool-divider' }),
+    h('div', { style: { width: '100%' } }, drawSel.el),
+    clearBtn
   );
   paintSwatches();
 }
 
 function paintSwatches() {
-  const dock = $('dock');
+  const dock = $('leftToolbar') || $('dock');
   SWATCHES.forEach((c, i) => swatchEls[i].classList.toggle('on', !brush.rainbow && brush.color.toLowerCase() === c));
   dock._rainbow?.classList.toggle('on', brush.rainbow);
   const custom = dock._custom;
@@ -587,7 +679,7 @@ function setTool(t) {
 
 /* ------------------------------------------------------------------ tabs */
 
-const TABS = [['fx', 'FX'], ['layers', 'Layers'], ['scenes', 'Scenes'], ['audio', 'Audio'], ['output', 'Output']];
+const TABS = [['fx', 'FX'], ['layers', 'Layers'], ['audio', 'Audio'], ['output', 'Output']];
 const panels = {};
 let activeTab = 'fx';
 
@@ -737,6 +829,7 @@ function randomizeMods(withAudio = audioState.status === 'on') {
   fx.set(base, 0.6);
   master.on = true;
   renderFx();
+
   touch();
 }
 
@@ -753,6 +846,7 @@ function randomizeReactions() {
   }
   fx.set(base, 0.6);
   renderFx();
+
   touch();
 }
 
@@ -1011,50 +1105,638 @@ window.addEventListener('drop', async (e) => {
   }
 });
 
-/* ---------------------------------------------------------------- scenes */
+/* ---------------------------------------------------------------- scenes & automation */
+
+function updateMonitorHud() {
+  const hudRes = $('hudRes');
+  const hudFps = $('hudFps');
+  if (hudRes) hudRes.textContent = `${Math.round(CTRL_H * aspect)}×${CTRL_H}`;
+  if (hudFps) hudFps.textContent = `${Math.round(fpsAvg)} FPS`;
+}
+
+function updateTopSceneBadge() {
+  const pill = $('activeScenePill');
+  if (!pill) return;
+  const cur = allPresets().find((p) => p.id === activeSceneId) || allPresets()[sceneIdx] || allPresets()[0];
+  if (cur) {
+    const lbl = pill.querySelector('.scene-lbl');
+    if (lbl) lbl.textContent = cur.name;
+    pill.classList.toggle('on', true);
+  }
+}
+
+function getPlaylist() {
+  const all = allPresets();
+  const enabled = all.filter((p) => p.enabled !== false);
+  return enabled.length > 0 ? enabled : all;
+}
+
+function nextAutoPreset() {
+  const list = getPlaylist();
+  if (!list.length) return;
+  if (settings.autoMode === 'shuffle' && list.length > 1) {
+    let nextIdx;
+    const curP = allPresets().find((p) => p.id === activeSceneId) || allPresets()[sceneIdx];
+    do {
+      nextIdx = Math.floor(Math.random() * list.length);
+    } while (list[nextIdx] === curP && list.length > 1);
+    applyPreset(list[nextIdx]);
+  } else {
+    const curP = allPresets().find((p) => p.id === activeSceneId) || allPresets()[sceneIdx];
+    const curListIdx = list.indexOf(curP);
+    const nextListIdx = (curListIdx + 1) % list.length;
+    applyPreset(list[nextListIdx]);
+  }
+}
+
+function prevAutoPreset() {
+  const list = getPlaylist();
+  if (!list.length) return;
+  const curP = allPresets().find((p) => p.id === activeSceneId) || allPresets()[sceneIdx];
+  const curListIdx = list.indexOf(curP);
+  const prevListIdx = (curListIdx - 1 + list.length) % list.length;
+  applyPreset(list[prevListIdx]);
+}
+
+
+/* ---------------------------------------------------------------- Central Beat Clock & Bottom Deck */
+
+function tapTempo() {
+  const now = performance.now();
+  if (clock.taps.length > 0 && (now - clock.taps[clock.taps.length - 1] > 2500)) {
+    clock.taps = [];
+  }
+  clock.taps.push(now);
+  if (clock.taps.length > 5) clock.taps.shift();
+
+  if (clock.taps.length >= 2) {
+    let sum = 0;
+    for (let i = 1; i < clock.taps.length; i++) {
+      sum += (clock.taps[i] - clock.taps[i - 1]);
+    }
+    const avgMs = sum / (clock.taps.length - 1);
+    if (avgMs > 0) {
+      clock.bpm = Math.min(220, Math.max(40, Math.round((60000 / avgMs) * 10) / 10));
+    }
+  }
+
+  // Align phase to downbeat on tap
+  clock.phase = 0;
+  clock.beatInBar = 0;
+  flashMetronomeBeat(0);
+  updateClockDisplay();
+
+  const tapBtn = $('tapTempoBtn');
+  if (tapBtn) {
+    tapBtn.classList.add('flash');
+    setTimeout(() => tapBtn.classList.remove('flash'), 120);
+  }
+  showToast(`Tempo set: ${clock.bpm.toFixed(1)} BPM`, 'info', 800);
+}
+
+function syncDownbeat() {
+  clock.phase = 0;
+  clock.beatInBar = 0;
+  clock.loopBeat = 0;
+  flashMetronomeBeat(0);
+  updateClockDisplay();
+  showToast('Beat Loop Reset to Downbeat (Beat 1)', 'info', 1000);
+}
+
+function setBpm(nv) {
+  clock.bpm = Math.min(220, Math.max(40, Math.round(nv * 10) / 10));
+  updateClockDisplay();
+  touch();
+}
+
+function nudgeBpm(delta) {
+  setBpm(clock.bpm + delta);
+}
+
+function flashMetronomeBeat(beatIdx) {
+  const dots = $('beatDots');
+  if (!dots) return;
+  for (let i = 0; i < dots.children.length; i++) {
+    const el = dots.children[i];
+    el.classList.toggle('flash', i === beatIdx);
+  }
+}
+
+function updateClockDisplay() {
+  const bpmNum = $('bpmNumber');
+  const bpmSlider = $('bpmSlider');
+  if (bpmNum) bpmNum.textContent = clock.bpm.toFixed(1);
+  if (bpmSlider) bpmSlider.value = clock.bpm;
+}
+
+function tickClock(dt) {
+  if (clock.source === 'audio') {
+    if (levels[LEVEL.beat] > 0.75 && (simT - lastBeatDetectTime > 0.18)) {
+      lastBeatDetectTime = simT;
+      clock.beatInBar = (clock.beatInBar + 1) % 4;
+      clock.loopBeat = (clock.loopBeat + 1) % (clock.loopLength || 32);
+      flashMetronomeBeat(clock.beatInBar);
+      if (settings.auto && !settings.autoPaused && settings.autoMode === 'beats') {
+        if (clock.loopBeat === 0) nextAutoPreset();
+      }
+    }
+  } else {
+    const beatDur = 60 / Math.max(20, clock.bpm);
+    const prevPhase = clock.phase;
+    clock.phase += dt / beatDur;
+
+    const prevBeat = Math.floor(prevPhase);
+    const curBeat = Math.floor(clock.phase);
+
+    if (curBeat > prevBeat) {
+      clock.beatInBar = curBeat % 4;
+      clock.loopBeat = (clock.loopBeat + 1) % (clock.loopLength || 32);
+      flashMetronomeBeat(clock.beatInBar);
+
+      if (settings.auto && !settings.autoPaused && settings.autoMode === 'beats') {
+        if (clock.loopBeat === 0) {
+          nextAutoPreset();
+        }
+      }
+    }
+  }
+
+  // Update metronome loop readout
+  const loopReadout = $('loopBeatReadout');
+  const loopBar = $('loopProgressBar');
+  if (loopReadout) loopReadout.textContent = `Beat ${clock.loopBeat + 1} / ${clock.loopLength}`;
+  if (loopBar) loopBar.style.width = `${((clock.loopBeat + 1) / clock.loopLength) * 100}%`;
+}
+
+function tickAutoCycle(dt) {
+  tickClock(dt);
+  if (levels[LEVEL.beat] > 0.75 && (simT - lastBeatDetectTime > 0.18)) {
+    lastBeatDetectTime = simT;
+    beatCount++;
+  }
+
+  const all = allPresets();
+  const curPreset = all.find((p) => p.id === activeSceneId) || all[sceneIdx] || all[0];
+  const targetHold = (curPreset && curPreset.hold != null && curPreset.hold > 0)
+    ? curPreset.hold
+    : settings.autoEvery;
+
+  if (settings.auto && !settings.autoPaused) {
+    if (settings.autoMode === 'beats') {
+      const targetBeats = Number(settings.autoBeats) || 32;
+      if (beatCount >= targetBeats) {
+        beatCount = 0;
+        nextAutoPreset();
+      }
+    } else {
+      autoT += dt;
+      if (autoT >= targetHold) {
+        autoT = 0;
+        nextAutoPreset();
+      }
+    }
+  }
+
+  updateTimelineProgress(targetHold);
+}
+
+function updateTimelineProgress(targetHold) {
+  const prg = $('timelineProgress');
+  const elapsedEl = $('timelineElapsed');
+  const totalEl = $('timelineTotal');
+  const statusEl = $('timelineStatus');
+  const nextEl = $('timelineNextScene');
+  if (!prg && !elapsedEl) return;
+
+  const isBeat = settings.autoMode === 'beats';
+  const target = isBeat ? (Number(settings.autoBeats) || 32) : targetHold;
+  const cur = isBeat ? beatCount : autoT;
+  const pct = Math.min(100, Math.max(0, (cur / target) * 100));
+
+  if (prg) {
+    prg.style.width = `${pct}%`;
+    prg.classList.toggle('beat-mode', isBeat);
+    prg.classList.toggle('dissolving', scene.ghostA > 0.05);
+  }
+
+  if (elapsedEl) {
+    elapsedEl.textContent = isBeat ? `Beat ${beatCount}` : `${Math.floor(cur)}s`;
+  }
+  if (totalEl) {
+    totalEl.textContent = isBeat ? `/ ${target} beats` : `/ ${Math.round(target)}s`;
+  }
+  if (statusEl) {
+    if (!settings.auto) statusEl.textContent = 'STOPPED';
+    else if (settings.autoPaused) statusEl.textContent = 'PAUSED';
+    else if (scene.ghostA > 0.05) statusEl.textContent = `DISSOLVING (${(scene.ghostDur * scene.ghostA).toFixed(1)}s)`;
+    else statusEl.textContent = 'HOLDING';
+  }
+  if (nextEl) {
+    const list = getPlaylist();
+    const curP = allPresets().find((p) => p.id === activeSceneId) || allPresets()[sceneIdx];
+    const nextIdx = (list.indexOf(curP) + 1) % list.length;
+    const nextP = list[nextIdx];
+    if (nextP) nextEl.textContent = `Next: ${nextP.name}`;
+  }
+}
+
+function overwritePreset(p) {
+  if (!p) return;
+  thumbReq = (thumb) => {
+    const snap = snapshotPreset(p.name, fx.target, fx.mods, config, thumb, {
+      id: p.id || uid(),
+      glide: p.glide,
+      hold: p.hold,
+      enabled: p.enabled !== false,
+      user: true,
+    });
+    const idx = userPresets.findIndex((x) => x.id === snap.id || x.name === snap.name);
+    if (idx !== -1) userPresets[idx] = snap;
+    else userPresets.push(snap);
+    activeSceneId = snap.id;
+    renderScenes();
+    updateTopSceneBadge();
+    touch();
+    showToast(`Saved over "${p.name}" with current look!`, 'success');
+  };
+}
+
+function saveNewPreset(name) {
+  const nm = name.trim() || `Scene ${userPresets.length + 1}`;
+  thumbReq = (thumb) => {
+    const snap = snapshotPreset(nm, fx.target, fx.mods, config, thumb, {
+      user: true,
+      enabled: true,
+    });
+    userPresets.push(snap);
+    activeSceneId = snap.id;
+    renderScenes();
+    updateTopSceneBadge();
+    touch();
+    showToast(`Saved new scene "${nm}"!`, 'success');
+  };
+}
+
+function duplicatePreset(p) {
+  const clone = {
+    ...p,
+    id: uid(),
+    name: `${p.name} (Copy)`,
+    user: true,
+    enabled: true,
+  };
+  userPresets.push(clone);
+  renderScenes();
+  touch();
+  showToast(`Duplicated scene as "${clone.name}"`, 'info');
+}
+
+function deletePreset(p) {
+  if (!p.user) {
+    const idx = userPresets.findIndex((x) => x.name === p.name);
+    if (idx !== -1) {
+      userPresets.splice(idx, 1);
+      renderScenes();
+      touch();
+      showToast(`Reset "${p.name}" to built-in default`, 'info');
+      return;
+    }
+    showToast('Built-in scenes cannot be deleted.', 'warning');
+    return;
+  }
+  userPresets = userPresets.filter((x) => x.id !== p.id && x !== p);
+  if (activeSceneId === p.id) {
+    activeSceneId = BUILTIN_PRESETS[0].id;
+    sceneIdx = 0;
+  }
+  renderScenes();
+  updateTopSceneBadge();
+  touch();
+  showToast(`Deleted "${p.name}"`, 'info');
+}
+
+function recaptureThumbnail(p) {
+  thumbReq = (thumb) => {
+    p.thumb = thumb;
+    const idx = userPresets.findIndex((x) => x.id === p.id || x.name === p.name);
+    if (idx !== -1) userPresets[idx].thumb = thumb;
+    else if (!p.user) {
+      const snap = { ...p, thumb, id: uid(), user: true };
+      userPresets.push(snap);
+    }
+    renderScenes();
+    touch();
+    showToast(`Updated thumbnail for "${p.name}"`, 'success');
+  };
+}
+
+function openSceneEditor(p) {
+  const modal = $('sceneEditModal');
+  const body = $('sceneEditBody');
+  if (!modal || !body) return;
+  body.replaceChildren();
+
+  const colors = swatchOf(p);
+  const bg = p.thumb ? `url(${p.thumb})` : `linear-gradient(135deg, ${colors[0]}, ${colors[1] || colors[0]} 55%, ${colors[2] || colors[0]})`;
+
+  const preview = h('div', { class: 'scene-edit-preview-row' },
+    h('div', { class: 'scene-edit-thumb', style: { backgroundImage: bg } }),
+    h('div', { class: 'scene-edit-preview-info' },
+      h('b', {}, p.name),
+      h('span', {}, p.user ? 'Custom Preset' : 'Built-in Preset', ` · ${p.layers ? p.layers.length : 0} layers`)
+    ),
+    button(h('span', { html: ICONS.camera }), () => recaptureThumbnail(p), 'icon', 'Recapture thumbnail from current canvas')
+  );
+
+  const nameInput = h('input', { class: 'name-input', value: p.name, placeholder: 'Scene name' });
+  nameInput.addEventListener('change', () => {
+    const val = nameInput.value.trim();
+    if (!val) return;
+    p.name = val;
+    if (p.user) {
+      const idx = userPresets.findIndex((x) => x.id === p.id);
+      if (idx !== -1) userPresets[idx].name = val;
+    }
+    renderScenes();
+    updateTopSceneBadge();
+    touch();
+    showToast(`Renamed to "${val}"`, 'info');
+  });
+
+  const actionRow = h('div', { class: 'btnrow' },
+    button([h('span', { html: ICONS.save }), ' Overwrite with Current Look'], () => overwritePreset(p), 'primary'),
+    button([h('span', { html: ICONS.copy }), ' Duplicate'], () => { duplicatePreset(p); modal.hidden = true; }),
+  );
+
+  const autoToggle = toggle({
+    label: 'Include in Auto-Cycle Playlist',
+    value: p.enabled !== false,
+    onChange: (v) => {
+      p.enabled = v;
+      const idx = userPresets.findIndex((x) => x.id === p.id || x.name === p.name);
+      if (idx !== -1) userPresets[idx].enabled = v;
+      else if (!p.user) {
+        const snap = { ...p, enabled: v, id: uid(), user: true };
+        userPresets.push(snap);
+      }
+      renderScenes();
+      touch();
+    }
+  });
+
+  const holdSlider = slider({
+    label: 'Hold Duration',
+    min: 0, max: 180, step: 1,
+    value: p.hold != null ? p.hold : 0,
+    def: 0,
+    fmt: (v) => (v === 0 ? `Global (${settings.autoEvery}s)` : `${v} s`),
+    tip: 'Set 0 to follow the global Auto-Cycle timer',
+    onInput: (v) => {
+      p.hold = v === 0 ? null : v;
+      const idx = userPresets.findIndex((x) => x.id === p.id || x.name === p.name);
+      if (idx !== -1) userPresets[idx].hold = p.hold;
+      else if (!p.user) {
+        const snap = { ...p, hold: p.hold, id: uid(), user: true };
+        userPresets.push(snap);
+      }
+      touch();
+    }
+  });
+
+  const glideSlider = slider({
+    label: 'Dissolve Time',
+    min: 0, max: 8, step: 0.1,
+    value: p.glide != null ? p.glide : 0,
+    def: 0,
+    fmt: (v) => (v === 0 ? `Global (${settings.glide}s)` : `${v.toFixed(1)} s`),
+    tip: 'Set 0 to follow the global Dissolve setting',
+    onInput: (v) => {
+      p.glide = v === 0 ? null : v;
+      const idx = userPresets.findIndex((x) => x.id === p.id || x.name === p.name);
+      if (idx !== -1) userPresets[idx].glide = p.glide;
+      else if (!p.user) {
+        const snap = { ...p, glide: p.glide, id: uid(), user: true };
+        userPresets.push(snap);
+      }
+      touch();
+    }
+  });
+
+  body.append(
+    preview,
+    section('Scene Name', nameInput),
+    actionRow,
+    section('Automation & Transition', autoToggle.el, holdSlider.el, glideSlider.el)
+  );
+
+  if (p.user) {
+    const delBtn = button([h('span', { html: ICONS.trash }), ' Delete Scene'], () => {
+      deletePreset(p);
+      modal.hidden = true;
+    }, 'danger on');
+    body.append(section('Danger Zone', delBtn));
+  }
+
+  modal.hidden = false;
+}
+
+function exportScenes() {
+  const exportData = {
+    app: 'Lumex Pro',
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    presets: userPresets,
+  };
+  const str = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([str], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `lumex_scenes_${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Exported custom scenes to JSON!', 'success');
+}
 
 function renderScenes() {
-  const root = panels.scenes;
-  root.replaceChildren();
+  const bottom = $('bottomPanel');
+  if (!bottom) return;
+  bottom.replaceChildren();
+
   const all = allPresets();
-  const grid = h('div', { class: 'scene-grid' });
-  all.forEach((p, i) => {
+  const curActive = all.find((p) => p.id === activeSceneId) || all[sceneIdx] || all[0];
+
+  // ------------------------------------------------ LEFT: Central Beat Clock & Sequencer Deck
+  const clockDeck = h('div', { class: 'clock-deck' });
+
+  const clockHead = h('div', { class: 'clock-header' },
+    h('div', { class: 'clock-title' }, h('i'), 'Central Beat Clock'),
+    segmented({
+      options: [['tap', 'Manual Clock'], ['audio', 'Audio In']],
+      value: clock.source,
+      onChange: (src) => { clock.source = src; touch(); }
+    }).el
+  );
+
+  // Tap button & BPM readout
+  const tapBtn = h('button', {
+    class: 'tap-btn', id: 'tapTempoBtn', title: 'Tap repeatedly to set tempo with music',
+    onclick: () => tapTempo()
+  }, h('b', {}, 'TAP'), h('span', { class: 'tap-sub' }, 'TEMPO'));
+
+  const bpmReadout = h('div', { class: 'bpm-readout-row' },
+    h('span', { class: 'bpm-number', id: 'bpmNumber' }, clock.bpm.toFixed(1)),
+    h('span', { class: 'bpm-unit' }, 'BPM'),
+    h('div', { class: 'bpm-nudge-btns' },
+      h('button', { class: 'nudge-btn', onclick: () => nudgeBpm(-1) }, '-1'),
+      h('button', { class: 'nudge-btn', onclick: () => nudgeBpm(1) }, '+1'),
+      h('button', { class: 'nudge-btn', onclick: () => nudgeBpm(-0.1) }, '-.1'),
+      h('button', { class: 'nudge-btn', onclick: () => nudgeBpm(0.1) }, '+.1')
+    )
+  );
+
+  const bpmSliderInput = h('input', {
+    type: 'range', min: 40, max: 220, step: 0.5, value: clock.bpm, id: 'bpmSlider',
+    oninput: (e) => setBpm(parseFloat(e.target.value))
+  });
+  const bpmRow = h('div', { class: 'tempo-tap-row' }, tapBtn, h('div', { class: 'bpm-display-wrap' }, bpmReadout, bpmSliderInput));
+
+  // Metronome & Downbeat reset
+  const beatDots = h('div', { class: 'beat-dots', id: 'beatDots' },
+    h('div', { class: 'beat-dot downbeat' }, '1'),
+    h('div', { class: 'beat-dot' }, '2'),
+    h('div', { class: 'beat-dot' }, '3'),
+    h('div', { class: 'beat-dot' }, '4')
+  );
+
+  const syncBtn = h('button', {
+    class: 'downbeat-btn', id: 'syncDownbeatBtn', title: 'Align immediately to Beat 1 (Downbeat/Drop)',
+    onclick: () => syncDownbeat()
+  }, '⟲ SYNC BEAT 1');
+
+  const metronomeRow = h('div', { class: 'metronome-row' }, beatDots, syncBtn);
+
+  // Beat Loop Length & Transport row
+  const loopLenSeg = segmented({
+    options: [[4, '4'], [8, '8'], [16, '16'], [32, '32'], [64, '64']],
+    value: clock.loopLength,
+    onChange: (len) => { clock.loopLength = Number(len); clock.loopBeat = 0; touch(); }
+  });
+
+  const loopRow = h('div', { class: 'loop-length-row' },
+    h('span', {}, 'Loop Length:'),
+    loopLenSeg.el,
+    h('span', { id: 'loopBeatReadout', style: { color: 'var(--accent-cyan)', fontWeight: '700' } }, `Beat 1 / ${clock.loopLength}`)
+  );
+
+  // Auto-Cycle Transport
+  const isPaused = settings.autoPaused;
+  const playBtn = h('button', {
+    class: 'transport-btn play-btn',
+    title: settings.auto ? (isPaused ? 'Resume Auto-Cycle' : 'Pause Auto-Cycle') : 'Start Auto-Cycle',
+    onclick: () => {
+      if (!settings.auto) { settings.auto = true; settings.autoPaused = false; autoT = 0; beatCount = 0; }
+      else { settings.autoPaused = !settings.autoPaused; }
+      renderScenes(); touch();
+    }
+  }, h('span', { html: (settings.auto && !isPaused) ? ICONS.pause : ICONS.play }));
+
+  const prevBtn = h('button', { class: 'transport-btn', title: 'Prev Scene', onclick: () => prevAutoPreset() }, h('span', { html: ICONS.skipPrev }));
+  const nextBtn = h('button', { class: 'transport-btn', title: 'Next Scene', onclick: () => nextAutoPreset() }, h('span', { html: ICONS.skipNext }));
+
+  const autoModeSeg = segmented({
+    options: [['beats', 'Beat Drop'], ['sequence', 'Seq Timer'], ['shuffle', 'Shuffle']],
+    value: settings.autoMode || 'beats',
+    onChange: (m) => { settings.autoMode = m; touch(); renderScenes(); }
+  });
+
+  const transportBar = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+    h('div', { class: 'transport-bar', style: { padding: 0 } }, prevBtn, playBtn, nextBtn),
+    autoModeSeg.el
+  );
+
+  clockDeck.append(clockHead, bpmRow, metronomeRow, loopRow, transportBar);
+
+  // ------------------------------------------------ RIGHT: Scene Selector Timeline Strip
+  const sceneDeck = h('div', { class: 'scene-deck' });
+
+  // Overwrite active scene button
+  const saveOverBtn = curActive ? button(
+    [h('span', { html: ICONS.save }), ` Save Over "${curActive.name}"`],
+    () => overwritePreset(curActive),
+    'primary small',
+    'Update active scene with live canvas'
+  ) : null;
+
+  // Save new scene
+  const quickName = h('input', { class: 'name-input', style: { height: '22px', width: '110px', margin: 0 }, placeholder: 'New look…' });
+  const quickSaveBtn = button('Save New', () => { saveNewPreset(quickName.value); quickName.value = ''; }, 'small');
+  quickName.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { saveNewPreset(quickName.value); quickName.value = ''; } });
+
+  const filterSeg = segmented({
+    options: [['all', 'All'], ['builtin', 'Built-in'], ['user', 'Custom']],
+    value: settings.sceneFilter || 'all',
+    onChange: (f) => { settings.sceneFilter = f; renderScenes(); touch(); }
+  });
+
+  const headerRight = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+    saveOverBtn,
+    h('div', { style: { display: 'flex', gap: '3px', alignItems: 'center' } }, quickName, quickSaveBtn),
+    filterSeg.el,
+    button(h('span', { html: ICONS.download }), exportScenes, 'icon small', 'Export Scenes'),
+    button(h('span', { html: ICONS.upload }), () => $('sceneImportInput')?.click(), 'icon small', 'Import Scenes')
+  );
+
+  const sceneDeckHead = h('div', { class: 'scene-deck-header' },
+    h('div', { class: 'scene-deck-title' }, `Scenes (${all.length})`),
+    headerRight
+  );
+
+  // Horizontal Strip
+  const stripScroll = h('div', { class: 'scene-strip-scroll' });
+
+  let filtered = all;
+  if (settings.sceneFilter === 'builtin') filtered = filtered.filter((p) => !p.user);
+  else if (settings.sceneFilter === 'user') filtered = filtered.filter((p) => p.user);
+
+  filtered.forEach((p, i) => {
     const colors = swatchOf(p);
     const bg = p.thumb ? `url(${p.thumb})` : `linear-gradient(135deg, ${colors[0]}, ${colors[1] || colors[0]} 55%, ${colors[2] || colors[0]})`;
-    grid.append(h('button', { class: 'scene', style: { backgroundImage: bg }, onclick: () => applyPreset(p) },
+    const isActive = (p.id === activeSceneId) || (!activeSceneId && i === 0);
+
+    const card = h('div', {
+      class: `scene-strip-card${isActive ? ' active-scene' : ''}`,
+      style: { backgroundImage: bg },
+      onclick: () => applyPreset(p)
+    },
       h('span', { class: 'shade' }),
       i < 9 ? h('kbd', { class: 'key' }, String(i + 1)) : null,
+      isActive ? h('span', { class: 'live-badge' }, 'LIVE') : null,
       h('span', { class: 'nm' }, p.name),
-      p.user ? h('span', {
-        class: 'mini del', title: 'Delete scene', html: ICONS.close,
-        onclick: (e) => { e.stopPropagation(); userPresets = userPresets.filter((x) => x !== p); renderScenes(); touch(); },
-      }) : null));
+      h('div', { class: 'scene-actions' },
+        h('button', {
+          class: 'scene-act-btn save-over', title: 'Overwrite with current look',
+          onclick: (e) => { e.stopPropagation(); overwritePreset(p); }
+        }, h('span', { html: ICONS.save })),
+        h('button', {
+          class: 'scene-act-btn', title: 'Edit scene settings',
+          onclick: (e) => { e.stopPropagation(); openSceneEditor(p); }
+        }, h('span', { html: ICONS.pencil })),
+        h('button', {
+          class: 'scene-act-btn', title: 'Duplicate scene',
+          onclick: (e) => { e.stopPropagation(); duplicatePreset(p); }
+        }, h('span', { html: ICONS.copy })),
+        p.user ? h('button', {
+          class: 'scene-act-btn del-btn', title: 'Delete scene',
+          onclick: (e) => { e.stopPropagation(); deletePreset(p); }
+        }, h('span', { html: ICONS.close })) : null
+      )
+    );
+    stripScroll.append(card);
   });
-  const name = h('input', { class: 'name-input', placeholder: 'Name this look…', spellcheck: 'false' });
-  const save = () => {
-    const nm = name.value.trim() || `Scene ${userPresets.length + 1}`;
-    thumbReq = (thumb) => {
-      userPresets.push(snapshotPreset(nm, fx.target, fx.mods, config, thumb));
-      renderScenes(); touch();
-    };
-  };
-  name.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') save(); });
-  root.append(
-    section('Scenes', grid),
-    section('Save current look', h('div', { class: 'save-row' }, name, button('Save', save, 'primary')),
-      h('p', { class: 'hint' }, 'Saves effects, layers and their settings. Drawings are not stored.')),
-    section('Transition', slider({
-      label: 'Dissolve', min: 0, max: 6, step: 0.1, value: settings.glide, def: 2, unit: 's',
-      onInput: (v) => { settings.glide = v; touch(); },
-    }).el, h('p', { class: 'hint' }, 'How long a scene change takes to melt into the next one.')),
-    section('Auto-cycle',
-      toggle({ label: 'Change scene by itself', value: settings.auto, onChange: (v) => { settings.auto = v; autoT = 0; touch(); } }).el,
-      slider({
-        label: 'Every', min: 8, max: 180, step: 1, value: settings.autoEvery, def: 45, unit: 's',
-        onInput: (v) => { settings.autoEvery = v; touch(); },
-      }).el,
-      h('p', { class: 'hint' }, 'Hands-free: steps through all scenes in order, dissolving between them.')),
-  );
+
+  sceneDeck.append(sceneDeckHead, stripScroll);
+  bottom.append(clockDeck, sceneDeck);
 }
 
 /* ----------------------------------------------------------------- audio */
@@ -1263,6 +1945,38 @@ addEventListener('keydown', (e) => {
 $('helpClose').addEventListener('click', () => ($('help').hidden = true));
 $('help').addEventListener('click', (e) => { if (e.target === $('help')) $('help').hidden = true; });
 
+$('sceneEditClose')?.addEventListener('click', () => { $('sceneEditModal').hidden = true; });
+$('sceneEditModal')?.addEventListener('click', (e) => { if (e.target === $('sceneEditModal')) $('sceneEditModal').hidden = true; });
+
+$('sceneImportInput')?.addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  e.target.value = '';
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      const incoming = Array.isArray(data) ? data : (data.presets || []);
+      if (!incoming.length) throw new Error('No valid presets found in JSON');
+      let count = 0;
+      for (const item of incoming) {
+        if (!item.name || !item.layers) continue;
+        const copy = { ...item, id: uid(), user: true };
+        userPresets.push(copy);
+        count++;
+      }
+      renderScenes();
+      touch();
+      showToast(`Imported ${count} scene(s) into library!`, 'success');
+    } catch (err) {
+      showToast('Import error: ' + err.message, 'warning');
+    }
+  };
+  reader.readAsText(file);
+});
+
+$('activeScenePill')?.addEventListener('click', () => { showTab('scenes'); });
+
 /* ------------------------------------------------------------------ boot */
 
 buildTabs();
@@ -1283,6 +1997,7 @@ if (bridge) {
 }
 setInterval(() => { if (out.connected) { updateStatus(); updateOutputCard(); } }, 1000);
 updateAudioStatus();
+updateTopSceneBadge();
 onAudioChange(() => { renderAudio(); updateAudioStatus(); });
 refreshDevices();
 if (audioCfg.on) startAudio();

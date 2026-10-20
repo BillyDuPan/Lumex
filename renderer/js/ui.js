@@ -16,6 +16,24 @@ export const ICONS = {
   power: svg('<path d="M12 3v9M6.3 6.8a8 8 0 1 0 11.4 0"/>'),
   wave: svg('<path d="M2 12c2.5-8 5-8 7.5 0s5 8 7.5 0c1.2-3.8 2.8-5.4 5-5.4"/>', 'width="14" height="14"'),
   bars: svg('<path d="M5 20V12M10 20V6M15 20V10M20 20V4"/>', 'width="14" height="14"'),
+  play: svg('<polygon points="6 4 20 12 6 20 6 4" fill="currentColor"/>', 'width="14" height="14"'),
+  pause: svg('<rect x="6" y="4" width="4" height="16" fill="currentColor"/><rect x="14" y="4" width="4" height="16" fill="currentColor"/>', 'width="14" height="14"'),
+  skipNext: svg('<polygon points="5 4 15 12 5 20 5 4" fill="currentColor"/><line x1="19" y1="5" x2="19" y2="19"/>', 'width="14" height="14"'),
+  skipPrev: svg('<polygon points="19 20 9 12 19 4 19 20" fill="currentColor"/><line x1="5" y1="19" x2="5" y2="5"/>', 'width="14" height="14"'),
+  save: svg('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>'),
+  copy: svg('<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+  camera: svg('<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>'),
+  shuffle: svg('<polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>', 'width="14" height="14"'),
+  clock: svg('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>', 'width="14" height="14"'),
+  check: svg('<polyline points="20 6 9 17 4 12"/>', 'width="14" height="14"'),
+  download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>', 'width="14" height="14"'),
+  upload: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>', 'width="14" height="14"'),
+  chevronRight: svg('<polyline points="9 18 15 12 9 6"/>', 'width="14" height="14"'),
+  chevronDown: svg('<polyline points="6 9 12 15 18 9"/>', 'width="14" height="14"'),
+  music: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>', 'width="14" height="14"'),
+  grid: svg('<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>', 'width="14" height="14"'),
+  list: svg('<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>', 'width="14" height="14"'),
+  refresh: svg('<path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>', 'width="14" height="14"'),
 };
 
 export function h(tag, attrs = {}, ...kids) {
@@ -38,6 +56,26 @@ export function h(tag, attrs = {}, ...kids) {
 const dec = (step) => (step >= 1 ? 0 : Math.min(4, Math.ceil(-Math.log10(step))));
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/**
+ * Toast notifications for feedback (Adobe style).
+ */
+export function showToast(message, type = 'info', duration = 2400) {
+  let container = document.getElementById('toastContainer');
+  if (!container) {
+    container = h('div', { id: 'toastContainer', class: 'toast-container' });
+    document.body.append(container);
+  }
+  const toast = h('div', { class: `toast toast-${type}` },
+    h('span', { class: 'toast-msg' }, message)
+  );
+  container.append(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 250);
+  }, duration);
+}
 
 /**
  * Rotary knob: drag up/down (hold Shift for fine), scroll, double-click to reset.
@@ -89,13 +127,11 @@ export function knob({ label, min, max, value, def, log = false, fmt, onInput })
 }
 
 /**
- * Labelled range input. Double-click the label or track to reset to `def`.
- * With `mod` ({ store, key, shapes, sources, isAudio, smoothFmt, rateRange, newEntry, onChange, register, live }) the row gets
- * a wave button that switches modulation on for this control and opens a small drawer: pick LFO or an audio source,
- * then shape / speed / intensity (LFO) or intensity / smoothing / duck (audio).
+ * Labelled range input with Adobe style editable number value on click.
+ * Double-click the label or track to reset to `def`.
  */
 export function slider({ label, min, max, step = 0.01, value, def, fmt, unit = '', tip, onInput, mod }) {
-  const out = h('output', { class: 'val' });
+  const out = h('output', { class: 'val', title: 'Click to type exact number · Double-click label to reset' });
   const input = h('input', { type: 'range', min, max, step });
   const show = (v) => {
     out.textContent = fmt ? fmt(v) : Number(v).toFixed(dec(step)) + (unit ? ' ' + unit : '');
@@ -113,6 +149,35 @@ export function slider({ label, min, max, step = 0.01, value, def, fmt, unit = '
     onInput(def);
   };
   input.addEventListener('dblclick', reset);
+
+  // Adobe-style direct numeric input on clicking value
+  out.addEventListener('click', (e) => {
+    if (out.querySelector('input')) return;
+    const curVal = Number(input.value);
+    const numInput = h('input', {
+      type: 'number',
+      min, max, step,
+      value: curVal,
+      class: 'val-input'
+    });
+    out.textContent = '';
+    out.append(numInput);
+    numInput.focus();
+    numInput.select();
+    const commitVal = () => {
+      let nv = parseFloat(numInput.value);
+      if (isNaN(nv)) nv = curVal;
+      nv = Math.max(min, Math.min(max, nv));
+      set(nv);
+      onInput(nv);
+    };
+    numInput.addEventListener('keydown', (ke) => {
+      ke.stopPropagation();
+      if (ke.key === 'Enter') commitVal();
+      else if (ke.key === 'Escape') show(curVal);
+    });
+    numInput.addEventListener('blur', commitVal);
+  });
 
   const track = h('span', { class: 'track' }, input);
   const row = h('div', { class: 'row slider' },
@@ -222,5 +287,6 @@ export function button(text, onclick, cls = '', title) {
 }
 
 export function section(title, ...body) {
-  return h('section', { class: 'group' }, title ? h('h3', {}, title) : null, ...body);
+  const head = title ? h('div', { class: 'group-head' }, h('h3', {}, title)) : null;
+  return h('section', { class: 'group' }, head, ...body);
 }

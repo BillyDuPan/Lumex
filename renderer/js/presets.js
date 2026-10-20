@@ -12,7 +12,7 @@ const A = (src, depth, smooth = 0.35, inv = false) => ({ src, depth, smooth, inv
 /** Starting scenes. Effect values not listed fall back to the neutral defaults. */
 export const BUILTIN_PRESETS = [
   {
-    name: 'Lava lamp', palette: 'sunset',
+    id: 'builtin_lavalamp', name: 'Lava lamp', palette: 'sunset', enabled: true, hold: null, glide: null,
     fx: { zoomSpeed: 0.04, warp: 0.012, warpScale: 2, blur: 0.08, glow: 0.5, hueSpin: 3, vig: 0.45 },
     mods: { glow: M(0.07, 0.3), warp: M(0.05, 0.5, 'drift'), exposure: A('bass', 0.1, 0.5), zoomSpeed: A('bass', 0.1, 0.55) },
     bg: '#12050a',
@@ -24,7 +24,7 @@ export const BUILTIN_PRESETS = [
     ],
   },
   {
-    name: 'Neon mandala', palette: 'neon',
+    id: 'builtin_neonmandala', name: 'Neon mandala', palette: 'neon', enabled: true, hold: null, glide: null,
     fx: { kN: 8, kSpin: 4, kZoom: 0.9, zoomSpeed: 0.12, zoomDepth: 1.1, warp: 0.008, glow: 0.6, sat: 1.2, rgb: 0.006, vig: 0.5 },
     mods: { hue: M(0.04, 0.5, 'drift'), glow: M(0.1, 0.25), kZoom: A('bass', 0.08, 0.3), rgb: A('beat', 0.5, 0.3), exposure: A('beat', 0.08, 0.3), kSpin: A('mid', 0.06, 0.6) },
     bg: '#04030a',
@@ -35,7 +35,7 @@ export const BUILTIN_PRESETS = [
     ],
   },
   {
-    name: 'Hypno', palette: 'rainbow',
+    id: 'builtin_hypno', name: 'Hypno', palette: 'rainbow', enabled: true, hold: null, glide: null,
     fx: { kN: 12, kSpin: -5, kZoom: 1, zoomSpeed: 0.2, zoomTwist: 28, warp: 0.03, warpScale: 3, hueSpin: 15, glow: 0.7, rgb: 0.01, sat: 1.35, vig: 0.5 },
     mods: {
       warp: M(0.06, 0.5, 'drift'), zoomTwist: M(0.04, 0.6, 'drift'), rgb: M(0.3, 0.4, 'pulse'),
@@ -49,7 +49,7 @@ export const BUILTIN_PRESETS = [
     ],
   },
   {
-    name: 'Tunnel', palette: 'aurora',
+    id: 'builtin_tunnel', name: 'Tunnel', palette: 'aurora', enabled: true, hold: null, glide: null,
     fx: { kN: 4, kSpin: 6, zoomSpeed: 0.32, zoomTwist: 20, echo: 0.82, echoZoom: 0.01, glow: 0.6, hueSpin: 22, sat: 1.3 },
     mods: {
       zoomSpeed: M(0.04, 0.3, 'drift'), rgb: M(0.2, 0.5, 'pulse'),
@@ -64,7 +64,7 @@ export const BUILTIN_PRESETS = [
     ],
   },
   {
-    name: 'Deep ocean', palette: 'ocean',
+    id: 'builtin_deepocean', name: 'Deep ocean', palette: 'ocean', enabled: true, hold: null, glide: null,
     fx: { zoomSpeed: 0.07, warp: 0.025, warpScale: 1.6, blur: 0.18, glow: 0.8, echo: 0.5, echoZoom: 0.004, vig: 0.55 },
     mods: { blur: M(0.05, 0.3, 'drift'), warp: M(0.08, 0.4), glow: A('bass', 0.3, 0.6), zoomSpeed: A('bass', 0.08, 0.6), sat: A('mid', 0.15, 0.5) },
     bg: '#01050d',
@@ -76,7 +76,7 @@ export const BUILTIN_PRESETS = [
     ],
   },
   {
-    name: 'Candy flower', palette: 'candy',
+    id: 'builtin_candyflower', name: 'Candy flower', palette: 'candy', enabled: true, hold: null, glide: null,
     fx: { kN: 6, kSpin: -3, kZoom: 0.9, zoomSpeed: 0.1, zoomTwist: 12, sat: 1.2, glow: 0.4, echo: 0.35, vig: 0.4 },
     mods: { sat: M(0.08, 0.2), zoomSpeed: M(0.03, 0.5), kZoom: A('bass', 0.08, 0.35), exposure: A('beat', 0.1, 0.3), hue: A('mid', 0.06, 0.55) },
     bg: '#0e0710',
@@ -87,14 +87,14 @@ export const BUILTIN_PRESETS = [
     ],
   },
   {
-    name: 'Blank canvas', palette: 'mono',
+    id: 'builtin_blankcanvas', name: 'Blank canvas', palette: 'mono', enabled: true, hold: null, glide: null,
     fx: { zoomSpeed: 0.04, warp: 0.01, glow: 0.8, echo: 0.8, echoZoom: 0.004, vig: 0.5 },
     mods: { glow: A('bass', 0.3, 0.45), exposure: A('beat', 0.08, 0.3), zoomSpeed: A('bass', 0.08, 0.55) },
     bg: '#030305',
     layers: [draw()],
   },
   {
-    name: 'Bioluminescence', palette: 'aurora',
+    id: 'builtin_bioluminescence', name: 'Bioluminescence', palette: 'aurora', enabled: true, hold: null, glide: null,
     fx: { zoomSpeed: 0.05, warp: 0.015, warpScale: 1.8, blur: 0.05, glow: 0.75, sat: 1.25, echo: 0.6, vig: 0.5 },
     mods: { glow: M(0.06, 0.35), warp: M(0.04, 0.4, 'drift'), exposure: A('beat', 0.12, 0.3), zoomSpeed: A('bass', 0.06, 0.5) },
     bg: '#02070c',
@@ -106,7 +106,7 @@ export const BUILTIN_PRESETS = [
     ],
   },
   {
-    name: 'Sacred Vision', palette: 'neon',
+    id: 'builtin_sacredvision', name: 'Sacred Vision', palette: 'neon', enabled: true, hold: null, glide: null,
     fx: { kN: 6, kSpin: 3, kZoom: 0.95, zoomSpeed: 0.08, zoomTwist: 16, glow: 0.65, sat: 1.3, echo: 0.45, vig: 0.45 },
     mods: { kZoom: A('bass', 0.08, 0.3), exposure: A('beat', 0.1, 0.3), glow: M(0.08, 0.25) },
     bg: '#05030c',
@@ -138,14 +138,29 @@ const plainMods = (store) => Object.fromEntries(Object.entries(store || {}).map(
   return [k, rest];
 }));
 
-export function snapshotPreset(name, fx, fxMods, config, thumb) {
+export function snapshotPreset(name, fx, fxMods, config, thumb, extra = {}) {
   return {
-    id: uid(), name, user: true, thumb,
-    fx: { ...fx }, mods: plainMods(fxMods), bg: config.bg,
+    id: extra.id || uid(),
+    name,
+    user: extra.user !== false,
+    thumb,
+    fx: { ...fx },
+    mods: plainMods(fxMods),
+    bg: config.bg,
     layers: config.layers.map((l) => ({
-      type: l.type, name: l.name, visible: l.visible, opacity: l.opacity, blend: l.blend, blur: l.blur,
-      p: { ...l.p }, mods: plainMods(l.mods),
+      type: l.type,
+      name: l.name,
+      visible: l.visible,
+      opacity: l.opacity,
+      blend: l.blend,
+      blur: l.blur,
+      p: { ...l.p },
+      mods: plainMods(l.mods),
     })),
     palette: (config.layers.find((l) => l.p.palette) || { p: {} }).p.palette,
+    glide: extra.glide !== undefined ? extra.glide : null,
+    hold: extra.hold !== undefined ? extra.hold : null,
+    enabled: extra.enabled !== undefined ? extra.enabled : true,
+    updated: Date.now(),
   };
 }

@@ -22,8 +22,22 @@ function displayList() {
 function createControl() {
   control = new BrowserWindow({
     width: 1480, height: 920, minWidth: 1000, minHeight: 640,
-    title: 'Lumen – Control', backgroundColor: '#0a0b0f',
+    title: 'Lumex Pro – Control', backgroundColor: '#161719',
     webPreferences: { ...webPrefs, autoplayPolicy: 'no-user-gesture-required', preload: require('path').join(__dirname, 'preload.js') },
+  });
+  control.webContents.on('console-message', (e, level, message, line, sourceId) => {
+    console.log(`[Renderer Console] ${message} (${sourceId}:${line})`);
+  });
+  control.webContents.on('did-finish-load', async () => {
+    try {
+      const ready = await control.webContents.executeJavaScript('!!window.__lumen');
+      const tabsCount = await control.webContents.executeJavaScript('document.getElementById("tabs")?.children.length');
+      const leftCount = await control.webContents.executeJavaScript('document.getElementById("leftToolbar")?.children.length');
+      const bottomCount = await control.webContents.executeJavaScript('document.getElementById("bottomPanel")?.children.length');
+      console.log(`[Control Page Loaded] Lumen initialized: ${ready}, tabs: ${tabsCount}, left toolbar items: ${leftCount}, bottom panel items: ${bottomCount}`);
+    } catch (err) {
+      console.error('[Control Check Error]', err);
+    }
   });
   control.loadURL(`${base}/control.html`);
   control.on('closed', () => {
@@ -46,7 +60,7 @@ function openOutput(displayId) {
     : null;
 
   const common = {
-    backgroundColor: '#000000', title: 'Lumen – Output', show: false,
+    backgroundColor: '#000000', title: 'Lumex Pro – Output', show: false,
     webPreferences: webPrefs,
   };
   if (display) {
