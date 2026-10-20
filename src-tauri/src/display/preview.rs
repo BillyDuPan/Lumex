@@ -382,22 +382,24 @@ impl DualSurfacePresenter {
 
         let mut proj_frame = None;
         if let Some(proj) = projector_surface {
-            match proj.surface.get_current_texture() {
-                Ok(frame) => {
-                    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-                    self.blit_pipeline.blit(
-                        device,
-                        &mut encoder,
-                        source_view,
-                        &view,
-                        proj.format,
-                        None, // Fullscreen on projector
-                    );
-                    proj_frame = Some(frame);
-                    proj_presented = true;
-                }
-                Err(e) => {
-                    log::warn!("Projector surface get_current_texture error: {}", e);
+            if let Some(ref surface) = proj.surface {
+                match surface.get_current_texture() {
+                    Ok(frame) => {
+                        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                        self.blit_pipeline.blit(
+                            device,
+                            &mut encoder,
+                            source_view,
+                            &view,
+                            proj.format,
+                            None, // Fullscreen on projector
+                        );
+                        proj_frame = Some(frame);
+                        proj_presented = true;
+                    }
+                    Err(e) => {
+                        log::warn!("Projector surface get_current_texture error: {}", e);
+                    }
                 }
             }
         }

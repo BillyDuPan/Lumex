@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Lumen – Output</title>
+  <title>Lumex – Output</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' ipc: tauri: http: https: blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ipc: tauri: http: https: ws: wss: blob: data:;">
   <style>
     html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
     body { display: grid; place-items: center; }
@@ -21,7 +21,7 @@
 <body>
   <canvas id="c"></canvas>
   <canvas id="grid"></canvas>
-  <div id="wait"><b>Lumen output</b>Waiting for the control window…<br>Double-click for fullscreen.</div>
+  <div id="wait"><b>Lumex Output</b>Waiting for the control window…<br>Double-click for fullscreen · Esc to close.</div>
   <script type="module" src="js/output.js"></script>
 </body>
 </html>

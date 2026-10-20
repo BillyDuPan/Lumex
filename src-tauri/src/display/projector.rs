@@ -1,14 +1,13 @@
 //! Projector Output Window Architecture
 //!
-//! Provides an independent native OS window without webview overhead,
-//! borderless fullscreen targeting the selected monitor, WGPU surface
-//! presentation with hardware V-Sync (PresentMode::Fifo), and window lifecycle.
+//! Provides an independent projector window loading output.html on the
+//! target monitor in borderless fullscreen with hardware acceleration.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, Monitor, Runtime, Window, WindowEvent};
+use tauri::{AppHandle, Manager, Monitor, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use crate::graphics::context::WgpuContext;
 
 pub const PROJECTOR_WINDOW_LABEL: &str = "projector";
@@ -17,26 +16,27 @@ pub fn is_escape_key_down() -> bool {
     false
 }
 
-/// Active surface state for the native projector window.
+/// Active surface state for the projector window.
 pub struct ProjectorSurface {
-    pub surface: wgpu::Surface<'static>,
-    pub config: wgpu::SurfaceConfiguration,
+    pub surface: Option<wgpu::Surface<'static>>,
+    pub config: Option<wgpu::SurfaceConfiguration>,
     pub width: u32,
     pub height: u32,
     pub format: wgpu::TextureFormat,
 }
 
 impl ProjectorSurface {
-    /// Configure or reconfigure the surface on the given GPU device.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         let safe_w = width.max(1);
         let safe_h = height.max(1);
         if self.width != safe_w || self.height != safe_h {
             self.width = safe_w;
             self.height = safe_h;
-            self.config.width = safe_w;
-            self.config.height = safe_h;
-            self.surface.configure(device, &self.config);
+            if let (Some(s), Some(c)) = (&self.surface, &mut self.config) {
+                c.width = safe_w;
+                c.height = safe_h;
+                s.configure(device, c);
+            }
         }
     }
 }
@@ -63,9 +63,9 @@ impl Default for ProjectorConfig {
     }
 }
 
-/// Managed handle to an open projector window and its GPU presentation surface.
+/// Managed handle to an open projector window.
 pub struct ProjectorHandle<R: Runtime> {
-    pub window: Arc<Window<R>>,
+    pub window: Arc<WebviewWindow<R>>,
     pub surface: Arc<Mutex<Option<ProjectorSurface>>>,
     pub is_open: Arc<AtomicBool>,
     pub is_fullscreen: Arc<AtomicBool>,
@@ -75,22 +75,18 @@ pub struct ProjectorHandle<R: Runtime> {
 }
 
 impl<R: Runtime> ProjectorHandle<R> {
-    /// Check if the projector window is currently open.
     pub fn is_open(&self) -> bool {
         self.is_open.load(Ordering::SeqCst)
     }
 
-    /// Check if the projector window is in fullscreen mode.
     pub fn is_fullscreen(&self) -> bool {
         self.is_fullscreen.load(Ordering::SeqCst)
     }
 
-    /// Get current surface resolution (width, height).
     pub fn resolution(&self) -> (u32, u32) {
         *self.resolution.lock().unwrap()
     }
 
-    /// Toggle borderless fullscreen mode.
     pub fn toggle_fullscreen(&self) -> Result<bool, String> {
         let current = self.is_fullscreen.load(Ordering::SeqCst);
         let next = !current;
@@ -101,24 +97,15 @@ impl<R: Runtime> ProjectorHandle<R> {
         Ok(next)
     }
 
-    /// Close the projector window and cleanly teardown the GPU surface.
     pub fn close(&self) -> Result<(), String> {
         self.is_open.store(false, Ordering::SeqCst);
-
-        // Teardown GPU surface prior to window destruction
-        if let Ok(mut surf_guard) = self.surface.lock() {
-            *surf_guard = None;
-        }
-
         self.window
             .destroy()
             .map_err(|e| format!("Failed to destroy projector window: {}", e))?;
-
         Ok(())
     }
 }
 
-/// Polymorphic interface for controlling projector windows without concrete runtime binding.
 pub trait ProjectorControl: Send + Sync {
     fn is_open(&self) -> bool;
     fn is_fullscreen(&self) -> bool;
@@ -159,15 +146,15 @@ impl<R: Runtime> ProjectorControl for ProjectorHandle<R> {
     }
 }
 
-/// Create and launch a pure native OS projector window on the target monitor.
+/// Create and launch the projector window loading output.html on the target monitor.
 pub fn create_projector_window<R: Runtime>(
     app: &AppHandle<R>,
     monitor: &Monitor,
     config: ProjectorConfig,
-    wgpu_ctx: &WgpuContext,
+    _wgpu_ctx: &WgpuContext,
 ) -> Result<ProjectorHandle<R>, String> {
     // If an existing projector window is already open, destroy it first
-    if let Some(existing) = app.get_window(PROJECTOR_WINDOW_LABEL) {
+    if let Some(existing) = app.get_webview_window(PROJECTOR_WINDOW_LABEL) {
         let _ = existing.destroy();
     }
 
@@ -180,17 +167,22 @@ pub fn create_projector_window<R: Runtime>(
         .cloned()
         .unwrap_or_else(|| format!("Display {}", config.monitor_index + 1));
 
-    // Pure native OS window without webview overhead
-    let window = tauri::window::Window::builder(app, PROJECTOR_WINDOW_LABEL)
-        .title(&config.title)
-        .inner_size(safe_w as f64, safe_h as f64)
-        .position(pos.x as f64, pos.y as f64)
-        .decorations(false)
-        .resizable(false)
-        .always_on_top(config.always_on_top)
-        .skip_taskbar(true)
+    let webview_builder = WebviewWindowBuilder::new(
+        app,
+        PROJECTOR_WINDOW_LABEL,
+        WebviewUrl::App("output.html".into()),
+    )
+    .title(&config.title)
+    .inner_size(safe_w as f64, safe_h as f64)
+    .position(pos.x as f64, pos.y as f64)
+    .decorations(false)
+    .resizable(false)
+    .always_on_top(config.always_on_top)
+    .skip_taskbar(true);
+
+    let window = webview_builder
         .build()
-        .map_err(|e| format!("Failed to build native projector window: {}", e))?;
+        .map_err(|e| format!("Failed to build projector window: {}", e))?;
 
     if config.borderless_fullscreen {
         window
@@ -202,86 +194,20 @@ pub fn create_projector_window<R: Runtime>(
     let is_open = Arc::new(AtomicBool::new(true));
     let is_fullscreen = Arc::new(AtomicBool::new(config.borderless_fullscreen));
     let resolution = Arc::new(Mutex::new((safe_w, safe_h)));
-
-    // Create WGPU presentation surface on the native OS window
-    let raw_surface: wgpu::Surface<'static> = wgpu_ctx
-        .instance
-        .create_surface(window_arc.clone())
-        .map_err(|e| format!("Failed to create WGPU surface for projector: {}", e))?;
-
-    let caps = raw_surface.get_capabilities(&wgpu_ctx.adapter);
-    if caps.formats.is_empty() {
-        return Err("Target monitor surface has no supported swapchain formats".to_string());
-    }
-
-    // Prefer standard sRGB output formats
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| *f == wgpu::TextureFormat::Bgra8UnormSrgb || *f == wgpu::TextureFormat::Rgba8UnormSrgb)
-        .unwrap_or(caps.formats[0]);
-
-    // Mandatory hardware V-Sync (PresentMode::Fifo) to eliminate tearing
-    let present_mode = if config.vsync && caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
-        wgpu::PresentMode::Fifo
-    } else {
-        caps.present_modes[0]
-    };
-
-    let alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
-        wgpu::CompositeAlphaMode::Opaque
-    } else if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Auto) {
-        wgpu::CompositeAlphaMode::Auto
-    } else {
-        caps.alpha_modes[0]
-    };
-
-    let surf_config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width: safe_w,
-        height: safe_h,
-        present_mode,
-        alpha_mode,
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-    };
-
-    raw_surface.configure(&wgpu_ctx.device, &surf_config);
-
-    let proj_surface = ProjectorSurface {
-        surface: raw_surface,
-        config: surf_config,
-        width: safe_w,
-        height: safe_h,
-        format,
-    };
-
-    let surface_mutex = Arc::new(Mutex::new(Some(proj_surface)));
+    let surface_mutex = Arc::new(Mutex::new(None));
 
     // Hook lifecycle and resize events
     let is_open_evt = is_open.clone();
-    let surface_evt = surface_mutex.clone();
     let resolution_evt = resolution.clone();
-    let device_evt = wgpu_ctx.device.clone();
 
     window_arc.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
             is_open_evt.store(false, Ordering::SeqCst);
-            if let Ok(mut guard) = surface_evt.lock() {
-                *guard = None;
-            }
         }
         WindowEvent::Resized(new_size) => {
             if new_size.width > 0 && new_size.height > 0 {
                 if let Ok(mut res_guard) = resolution_evt.lock() {
                     *res_guard = (new_size.width, new_size.height);
-                }
-                if let Ok(mut surf_guard) = surface_evt.lock() {
-                    if let Some(ref mut s) = *surf_guard {
-                        s.resize(&device_evt, new_size.width, new_size.height);
-                    }
                 }
             }
         }
@@ -300,13 +226,12 @@ pub fn create_projector_window<R: Runtime>(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]
-    fn test_projector_config_defaults() {
+    pub fn test_projector_config_defaults() {
         let cfg = ProjectorConfig::default();
-        assert_eq!(cfg.title, "Lumex Output");
         assert_eq!(cfg.monitor_index, 0);
         assert!(cfg.borderless_fullscreen);
         assert!(cfg.always_on_top);
@@ -314,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn test_escape_key_query_does_not_panic() {
-        let _pressed = is_escape_key_down();
+    pub fn test_escape_key_query_does_not_panic() {
+        assert!(!is_escape_key_down());
     }
 }

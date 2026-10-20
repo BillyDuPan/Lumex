@@ -125,6 +125,7 @@ function report() {
 
 addEventListener('resize', () => { fit(); report(); });
 addEventListener('pagehide', () => link.send({ type: 'bye' }));
+addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
 addEventListener('dblclick', () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen?.().catch(() => {});
