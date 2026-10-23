@@ -3,8 +3,12 @@
  * Seamlessly interfaces with Tauri v2 IPC, Electron IPC, or browser fallbacks.
  */
 
+// Electron's preload.js exposes a read-only window.lumen; grab it before we would shadow it.
+const electronApi = typeof window !== 'undefined' ? window.lumen : undefined;
+
 class UniversalBridge {
   constructor() {
+    this.electron = electronApi || null;
     this.displays = [];
     this.displayListeners = new Set();
     this.closeListeners = new Set();
@@ -13,6 +17,20 @@ class UniversalBridge {
   }
 
   async init() {
+    if (this.electron) {
+      this.electron.onDisplays((list) => {
+        this.displays = list;
+        this.displayListeners.forEach((fn) => {
+          try { fn(list); } catch (e) { console.error(e); }
+        });
+      });
+      this.electron.onOutputClosed(() => {
+        this.closeListeners.forEach((fn) => {
+          try { fn(); } catch (e) { console.error(e); }
+        });
+      });
+      return;
+    }
     if (typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.event) {
       try {
         await window.__TAURI__.event.listen('projector:opened', () => {
@@ -42,6 +60,10 @@ class UniversalBridge {
   }
 
   async listDisplays() {
+    if (this.electron) {
+      this.displays = await this.electron.listDisplays();
+      return this.displays;
+    }
     if (this.isTauri) {
       try {
         const monitors = await window.__TAURI__.core.invoke('get_monitors');
@@ -68,6 +90,7 @@ class UniversalBridge {
   }
 
   async openOutput(opts) {
+    if (this.electron) return this.electron.openOutput(opts);
     if (this.isTauri) {
       try {
         const sel = opts?.displayId;
@@ -85,6 +108,7 @@ class UniversalBridge {
   }
 
   async closeOutput() {
+    if (this.electron) return this.electron.closeOutput();
     if (this.isTauri) {
       try {
         return await window.__TAURI__.core.invoke('close_projector');
@@ -95,6 +119,7 @@ class UniversalBridge {
   }
 
   async toggleFullscreen() {
+    if (this.electron) return this.electron.toggleFullscreen();
     if (this.isTauri) {
       try {
         return await window.__TAURI__.core.invoke('toggle_projector_fullscreen');
@@ -118,19 +143,20 @@ class UniversalBridge {
   }
 
   async micStatus() {
-    return 'granted';
+    return this.electron ? this.electron.micStatus() : 'granted';
   }
 
   async askMic() {
-    return true;
+    return this.electron ? this.electron.askMic() : true;
   }
 
   openMicSettings() {
+    if (this.electron) return this.electron.openMicSettings();
     console.log('[Bridge] openMicSettings');
   }
 }
 
 export const bridge = new UniversalBridge();
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && !electronApi) {
   window.lumen = bridge;
 }
