@@ -6,7 +6,7 @@ pub mod midi;
 pub mod compute;
 pub mod sharing;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,6 +30,19 @@ pub fn run() {
         }
       }
 
+      // Hook projector window close request to gracefully hide it
+      if let Some(proj_win) = app.get_webview_window("projector") {
+        let proj_clone = proj_win.clone();
+        let app_handle = app.handle().clone();
+        proj_win.on_window_event(move |event| {
+          if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = proj_clone.hide();
+            let _ = app_handle.emit("projector:closed", ());
+          }
+        });
+      }
+
       // Explicitly reveal and focus the control window on desktop launch
       if let Some(main_win) = app.get_webview_window("main") {
         let _ = main_win.show();
@@ -44,6 +57,8 @@ pub fn run() {
       commands::close_projector,
       commands::toggle_projector_fullscreen,
       commands::get_engine_status,
+      commands::save_project_file,
+      commands::read_project_file,
     ])
     .run(tauri::generate_context!())
     .expect("error while building tauri application");

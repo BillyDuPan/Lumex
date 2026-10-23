@@ -9,6 +9,7 @@ import { SHAPES, SOURCES, LEVEL, master, levels, newEntry, stepStore, reach, isA
 import { audioCfg, audioState, onAudioChange, startAudio, stopAudio, setGain, updateAudio, refreshDevices, micHelp, audioInputNode, audioContext } from './audio.js';
 import { clamp, uid } from './util.js';
 import { getAllMedia, getMediaAsset, saveUserMedia, deleteUserMedia, loadUserMedia, getImage } from './media.js';
+import { projectMgr } from './project.js';
 
 const $ = (id) => document.getElementById(id);
 import { bridge } from './bridge.js';
@@ -75,7 +76,7 @@ if (saved.config?.layers?.length) {
   fx.mods = presetFxMods(p);
 }
 
-const out = { connected: false, last: 0, w: 0, h: 0, fps: 0 };
+const out = { connected: false, isOpen: false, last: 0, w: 0, h: 0, fps: 0 };
 const mouse = { x: 0.5 * aspect, y: 0.5, vx: 0, vy: 0, down: false, active: false };
 
 const scene = new Scene(CTRL_H, aspect);
@@ -96,7 +97,11 @@ try {
 
 let dirty = false;
 let saveTimer = 0;
-const touch = () => { dirty = true; scheduleSave(); };
+const touch = () => {
+  dirty = true;
+  projectMgr.markDirty();
+  scheduleSave();
+};
 
 function scheduleSave() {
   clearTimeout(saveTimer);
@@ -106,6 +111,187 @@ function scheduleSave() {
       localStorage.setItem(SAVE_KEY, JSON.stringify(state, (k, v) => (k === 'ph' ? undefined : v)));
     } catch { /* storage may be unavailable */ }
   }, 400);
+}
+
+/* ------------------------------------------------------------- project hub */
+
+function openWelcomeHub() {
+  const modal = $('welcomeModal');
+  if (!modal) return;
+  modal.hidden = false;
+  renderRecentProjects();
+  const pref = $('welcomeStartupPref');
+  if (pref) pref.checked = projectMgr.shouldShowWelcomeOnStartup();
+}
+
+function closeWelcomeHub() {
+  const modal = $('welcomeModal');
+  if (modal) modal.hidden = true;
+}
+
+function renderRecentProjects() {
+  const listEl = $('recentProjectsList');
+  if (!listEl) return;
+  listEl.replaceChildren();
+  const recents = projectMgr.getRecentProjects();
+  if (!recents.length) {
+    listEl.innerHTML = '<div style="padding: 24px 10px; text-align: center; color: var(--dim); font-size: 11px;">No recent projects yet. Start with the Showcase Project or create a new blank one!</div>';
+    return;
+  }
+  for (const p of recents) {
+    const item = h('div', { class: 'recent-item', onclick: () => loadRecentProject(p) },
+      h('div', { class: 'recent-thumb', style: p.thumbnail ? { backgroundImage: `url(${p.thumbnail})` } : {} }),
+      h('div', { class: 'recent-meta' },
+        h('span', { class: 'recent-title' }, p.name),
+        h('span', { class: 'recent-sub' }, `${p.sceneCount || 0} scenes · ${new Date(p.modified).toLocaleDateString()}`)
+      )
+    );
+    listEl.append(item);
+  }
+}
+
+async function loadRecentProject(meta) {
+  if (meta.isDemo) {
+    loadShowcaseProject();
+    closeWelcomeHub();
+    return;
+  }
+  if (meta.filePath && window.__TAURI__?.core) {
+    try {
+      const contents = await window.__TAURI__.core.invoke('read_project_file', { path: meta.filePath });
+      applyProjectPackage(projectMgr.unpackageProject(contents));
+      closeWelcomeHub();
+      showToast(`Loaded "${meta.name}"`);
+      return;
+    } catch (e) {
+      console.warn('Failed to read recent project file:', e);
+    }
+  }
+  showToast(`Select project file to open: ${meta.name}`, 'warning');
+  $('projectFileInput')?.click();
+}
+
+function loadShowcaseProject() {
+  const p = projectMgr.createShowcaseProject();
+  userPresets = [];
+  config.layers = presetLayers(BUILTIN_PRESETS[0]);
+  config.bg = BUILTIN_PRESETS[0].bg;
+  fx.set({ ...FX_DEFAULTS, ...BUILTIN_PRESETS[0].fx });
+  Object.assign(fx.cur, fx.target);
+  fx.mods = presetFxMods(BUILTIN_PRESETS[0]);
+  activeSceneId = BUILTIN_PRESETS[0].id;
+  commitStructure();
+  renderScenes();
+  renderFx();
+  updateProjectNameDisplay();
+  closeWelcomeHub();
+  showToast('Showcase Project loaded');
+}
+
+function applyProjectPackage(pkg) {
+  if (pkg.settings) Object.assign(settings, pkg.settings);
+  if (pkg.clock && pkg.clock.bpm) {
+    clock.bpm = pkg.clock.bpm;
+    if (pkg.clock.loopLength) clock.loopLength = pkg.clock.loopLength;
+  }
+  if (pkg.scenes && pkg.scenes.length) {
+    userPresets = pkg.scenes.filter((s) => s.user);
+  }
+  if (pkg.config) {
+    config.bg = pkg.config.bg || '#030208';
+    config.layers = pkg.config.layers || [];
+  }
+  if (pkg.fx) {
+    fx.set(pkg.fx);
+    Object.assign(fx.cur, fx.target);
+  }
+  if (pkg.fxMods) fx.mods = pkg.fxMods;
+  if (pkg.activeSceneId) activeSceneId = pkg.activeSceneId;
+
+  commitStructure();
+  renderScenes();
+  renderFx();
+  renderDock();
+  renderAudio();
+  updateProjectNameDisplay();
+  showToast(`Project "${pkg.name}" loaded`);
+}
+
+function updateProjectNameDisplay() {
+  const nameEl = $('projectName');
+  if (nameEl) nameEl.textContent = projectMgr.currentProject.name;
+  const isDirty = projectMgr.isDirty;
+  const dirtyDot = $('dirtyDot');
+  if (dirtyDot) dirtyDot.hidden = !isDirty;
+  document.title = (isDirty ? '• ' : '') + `Lumex Pro – ${projectMgr.currentProject.name}`;
+}
+
+async function saveActiveProject(asNew = false) {
+  const all = allPresets();
+  const state = {
+    settings,
+    clock,
+    brush,
+    audioCfg,
+    lfo: master,
+    scenes: all,
+    activeSceneId,
+    config,
+    fx: fx.target,
+    fxMods: fx.mods,
+  };
+  const thumb = makeThumb();
+  const pkg = projectMgr.packageProject(state, thumb);
+  if (asNew) {
+    const newName = prompt('Save Project As:', projectMgr.currentProject.name);
+    if (!newName) return;
+    pkg.name = newName;
+    projectMgr.currentProject.name = newName;
+    projectMgr.currentProject.filePath = null;
+  }
+  await projectMgr.saveToFile(pkg);
+  updateProjectNameDisplay();
+  showToast(`Project "${pkg.name}" saved`);
+}
+
+function showNewProjectDialog() {
+  const modal = $('newProjectModal');
+  if (modal) modal.hidden = false;
+  $('newProjNameInput')?.focus();
+}
+
+function closeNewProjectDialog() {
+  const modal = $('newProjectModal');
+  if (modal) modal.hidden = true;
+}
+
+function createNewProjectFromDialog() {
+  const name = $('newProjNameInput')?.value?.trim() || 'Untitled Project';
+  const aspectMode = $('newProjAspectSelect')?.value || '16:9';
+  const bpm = parseFloat($('newProjBpmInput')?.value) || 124.0;
+
+  const [aw, ah] = aspectMode.split(':').map(Number);
+  const aspectVal = (aw && ah) ? aw / ah : 16 / 9;
+
+  const initial = projectMgr.createNewProject(name, aspectVal, bpm);
+  settings.aspect = aspectVal;
+  settings.aspectMode = aspectMode;
+  clock.bpm = bpm;
+  userPresets = [];
+  config.layers = [makeLayerConfig('draw', { name: 'Drawing' })];
+  config.bg = '#020108';
+  fx.set(FX_DEFAULTS);
+  Object.assign(fx.cur, fx.target);
+  fx.mods = {};
+  activeSceneId = null;
+
+  commitStructure();
+  renderScenes();
+  renderFx();
+  updateProjectNameDisplay();
+  closeNewProjectDialog();
+  closeWelcomeHub();
+  showToast(`New Project "${name}" created`);
 }
 
 /* ----------------------------------------------------------------- layers */
@@ -214,20 +400,21 @@ async function sendInit() {
 }
 
 function noteAlive(m) {
+  if (!out.isOpen) return;
   out.last = performance.now();
   out.w = m.w; out.h = m.h; out.fps = m.fps || out.fps;
   if (!out.connected) {
     out.connected = true;
     renderTopActions(); renderOutput();
-    if (m.type === 'alive') sendInit(); // output was already running (e.g. this window was reloaded)
+    if (m.type === 'alive') sendInit();
   }
   if (settings.aspectMode === 'auto' && m.w && m.h) setAspect(m.w / m.h);
 }
 
 link.on((m) => {
-  if (m.type === 'hello') { noteAlive(m); sendInit(); }
-  else if (m.type === 'alive') noteAlive(m);
-  else if (m.type === 'bye') { out.connected = false; renderTopActions(); renderOutput(); }
+  if (m.type === 'hello') { if (out.isOpen) { noteAlive(m); sendInit(); } }
+  else if (m.type === 'alive') { if (out.isOpen) noteAlive(m); }
+  else if (m.type === 'bye') { out.isOpen = false; out.connected = false; renderTopActions(); renderOutput(); }
 });
 
 function setAspect(a) {
@@ -246,6 +433,8 @@ function aspectFromMode() {
 }
 
 async function openOutput() {
+  out.isOpen = true;
+  renderTopActions(); renderOutput();
   if (bridge) {
     const sel = settings.display;
     await bridge.openOutput({ displayId: sel && sel !== 'window' ? Number(sel) : null });
@@ -256,13 +445,14 @@ async function openOutput() {
 }
 
 function closeOutput() {
+  out.isOpen = false;
+  out.connected = false;
   if (bridge) bridge.closeOutput();
   link.send({ type: 'close' });
-  out.connected = false;
   renderTopActions(); renderOutput();
 }
 
-const toggleOutput = () => (out.connected ? closeOutput() : openOutput());
+const toggleOutput = () => ((out.isOpen || out.connected) ? closeOutput() : openOutput());
 
 /* ------------------------------------------------------------ preview size */
 
@@ -474,6 +664,16 @@ function frame(now) {
   updateMonitorHud();
 
   blackBadge.classList.toggle('show', fx.blackTarget > 0.5);
+  const cueBadge = $('cueBadge');
+  if (cueBadge) {
+    const liveDeck = decks.crossfader >= 0.5 ? 'b' : 'a';
+    const cuedDeck = liveDeck === 'a' ? 'b' : 'a';
+    const isShowingCue = (decks.previewMode === 'cue') || (decks.previewMode === 'auto' && decks.editDeck === cuedDeck);
+    cueBadge.hidden = !isShowingCue;
+    if (isShowingCue) {
+      cueBadge.textContent = `CUE PREVIEW · DECK ${decks.editDeck.toUpperCase()}: "${decks[decks.editDeck].name}" (NOT ON BEAMER)`;
+    }
+  }
   if (out.connected && now - out.last > 3000) { out.connected = false; renderTopActions(); renderOutput(); }
 }
 
@@ -491,8 +691,11 @@ function makeThumb() {
 let viewSeg;
 function updateStatus() {
   const status = $('status');
-  status.classList.toggle('on', out.connected);
-  status.lastElementChild.textContent = out.connected ? `Output live · ${out.w}×${out.h}` : 'Output closed';
+  const isLive = out.connected;
+  const isOpen = out.isOpen || out.connected;
+  status.classList.toggle('on', isLive);
+  status.classList.toggle('waiting', isOpen && !isLive);
+  status.lastElementChild.textContent = isLive ? `Output live · ${out.w}×${out.h}` : (isOpen ? 'Output open (connecting…)' : 'Output closed');
 }
 
 function renderTopActions() {
@@ -505,11 +708,23 @@ function renderTopActions() {
     value: settings.view,
     onChange: (v) => setView(v),
   });
+
+  const deckPreviewSeg = segmented({
+    options: [
+      ['auto', 'Auto Deck', 'Preview whichever deck you are actively editing'],
+      ['master', 'Program Live', 'Preview the true master crossfaded beamer output'],
+      ['cue', 'Cue Standby', 'Force preview of the cued standby deck'],
+    ],
+    value: decks.previewMode || 'auto',
+    onChange: (v) => { decks.previewMode = v; updateCueBadge(); touch(); },
+  });
+
   root.append(
+    deckPreviewSeg.el,
     viewSeg.el,
     button(['Clear', h('kbd', {}, 'C')], clearCurrent, '', 'Clear the current drawing layer'),
     button(['Blackout', h('kbd', {}, 'B')], toggleBlackout, 'danger' + (fx.blackTarget > 0.5 ? ' on' : ''), 'Fade the output to black'),
-    button([out.connected ? 'Close output' : 'Open output', h('kbd', {}, 'O')], toggleOutput, out.connected ? '' : 'primary'),
+    button([(out.isOpen || out.connected) ? 'Close output' : 'Open output', h('kbd', {}, 'O')], toggleOutput, (out.isOpen || out.connected) ? 'danger' : 'primary'),
     button(h('span', { html: ICONS.help }), () => ($('help').hidden = false), 'icon ghost', 'Shortcuts'),
   );
 }
@@ -957,6 +1172,75 @@ function renderLayers() {
       )
     );
     sec.append(card);
+  } else if (cfg.type === 'video') {
+    const videoName = cfg.p.src ? (cfg.p.src.split('/').pop().split('\\').pop() || 'Video Clip') : 'No video selected';
+    const card = h('div', { class: 'image-card-preview' },
+      h('div', { class: 'image-card-thumb', style: { display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' } }, '🎬'),
+      h('div', { class: 'image-card-meta' },
+        h('b', {}, videoName),
+        h('span', {}, cfg.p.src ? 'Video loop loaded' : 'MP4, WebM, MOV supported')
+      ),
+      h('div', { class: 'image-card-actions' },
+        button('Choose File…', () => {
+          const input = $('videoFileInput');
+          if (input) {
+            input.onchange = (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const url = URL.createObjectURL(file);
+              cfg.p.src = url;
+              cfg.name = file.name.replace(/\.[^/.]+$/, '');
+              touch();
+              renderLayers();
+              renderDock();
+            };
+            input.click();
+          }
+        }, 'primary')
+      )
+    );
+    sec.append(
+      card,
+      slider({
+        label: 'Cue In', min: 0, max: 0.95, step: 0.01, value: cfg.p.inPoint || 0, def: 0,
+        fmt: (v) => Math.round(v * 100) + '%',
+        onInput: (v) => { cfg.p.inPoint = v; touch(); },
+      }).el,
+      slider({
+        label: 'Cue Out', min: 0.05, max: 1.0, step: 0.01, value: cfg.p.outPoint !== undefined ? cfg.p.outPoint : 1, def: 1,
+        fmt: (v) => Math.round(v * 100) + '%',
+        onInput: (v) => { cfg.p.outPoint = v; touch(); },
+      }).el,
+    );
+  } else if (cfg.type === 'camera') {
+    const devSelect = h('select', {
+      class: 'select-input',
+      onchange: (e) => { cfg.p.deviceId = e.target.value; touch(); }
+    }, h('option', { value: 'default' }, 'Default Camera / Webcam'));
+
+    if (navigator.mediaDevices?.enumerateDevices) {
+      navigator.mediaDevices.enumerateDevices().then((devices) => {
+        const videoDevs = devices.filter((d) => d.kind === 'videoinput');
+        if (videoDevs.length > 0) {
+          devSelect.replaceChildren();
+          for (let i = 0; i < videoDevs.length; i++) {
+            const d = videoDevs[i];
+            const opt = h('option', { value: d.deviceId || 'default' }, d.label || `Camera ${i + 1}`);
+            if (cfg.p.deviceId === d.deviceId) opt.selected = true;
+            devSelect.append(opt);
+          }
+        }
+      }).catch(() => {});
+    }
+
+    const camHeader = h('div', { class: 'image-card-preview' },
+      h('div', { class: 'image-card-thumb', style: { display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' } }, '📹'),
+      h('div', { class: 'image-card-meta', style: { flex: 1 } },
+        h('b', {}, 'Connected Live Camera'),
+        h('span', {}, 'FaceTime HD / Windows UVC / Capture Cards')
+      )
+    );
+    sec.append(camHeader, h('div', { class: 'param-row' }, h('span', { class: 'lbl' }, 'Device'), devSelect));
   }
   for (const it of LAYER_TYPES[cfg.type].schema) sec.append(controlFor(cfg, it));
   root.append(sec);
@@ -1558,6 +1842,225 @@ function exportScenes() {
   showToast('Exported custom scenes to JSON!', 'success');
 }
 
+/* ------------------------------------------------------------- dual deck */
+
+const decks = {
+  a: {
+    sceneId: BUILTIN_PRESETS[0].id,
+    name: BUILTIN_PRESETS[0].name,
+    preset: BUILTIN_PRESETS[0],
+    config: { bg: BUILTIN_PRESETS[0].bg, layers: presetLayers(BUILTIN_PRESETS[0]) },
+    fx: { ...FX_DEFAULTS, ...BUILTIN_PRESETS[0].fx },
+    fxMods: presetFxMods(BUILTIN_PRESETS[0]),
+  },
+  b: {
+    sceneId: BUILTIN_PRESETS[1]?.id || null,
+    name: BUILTIN_PRESETS[1]?.name || 'Deck B',
+    preset: BUILTIN_PRESETS[1] || null,
+    config: BUILTIN_PRESETS[1] ? { bg: BUILTIN_PRESETS[1].bg, layers: presetLayers(BUILTIN_PRESETS[1]) } : { bg: '#030208', layers: [] },
+    fx: BUILTIN_PRESETS[1] ? { ...FX_DEFAULTS, ...BUILTIN_PRESETS[1].fx } : { ...FX_DEFAULTS },
+    fxMods: BUILTIN_PRESETS[1] ? presetFxMods(BUILTIN_PRESETS[1]) : {},
+  },
+  crossfader: 0.0,
+  curve: 'smooth',
+  autoFading: false,
+  autoFadeBeats: 4,
+  editDeck: 'a',
+  previewMode: 'auto',
+};
+
+let autoFadeAnim = null;
+
+function saveActiveStateToDeck(deckKey) {
+  if (!decks[deckKey]) return;
+  decks[deckKey].config = { bg: config.bg, layers: JSON.parse(JSON.stringify(config.layers)) };
+  decks[deckKey].fx = { ...fx.target };
+  decks[deckKey].fxMods = { ...fx.mods };
+}
+
+function switchEditDeck(targetDeck) {
+  if (!decks[targetDeck]) return;
+  saveActiveStateToDeck(decks.editDeck);
+  decks.editDeck = targetDeck;
+
+  const d = decks[targetDeck];
+  if (d.config) {
+    config.bg = d.config.bg || '#030208';
+    config.layers = JSON.parse(JSON.stringify(d.config.layers || []));
+  }
+  if (d.fx) {
+    fx.set(d.fx);
+    Object.assign(fx.cur, fx.target);
+  }
+  if (d.fxMods) fx.mods = d.fxMods;
+  if (d.sceneId) activeSceneId = d.sceneId;
+
+  commitStructure();
+  renderLayers();
+  renderFx();
+  renderDock();
+  renderScenes();
+  updateDeckLiveDisplay();
+  updateCueBadge();
+  updateTopSceneBadge();
+  showToast(`Editing Deck ${targetDeck.toUpperCase()}: "${d.name}"`, 'info');
+}
+
+function assignToDeck(deckKey, preset) {
+  decks[deckKey] = {
+    sceneId: preset.id,
+    name: preset.name,
+    preset,
+    config: { bg: preset.bg, layers: presetLayers(preset) },
+    fx: { ...FX_DEFAULTS, ...(preset.fx || {}) },
+    fxMods: presetFxMods(preset),
+  };
+
+  if (decks.editDeck === deckKey) {
+    config.bg = preset.bg;
+    config.layers = presetLayers(preset);
+    fx.set({ ...FX_DEFAULTS, ...(preset.fx || {}) });
+    Object.assign(fx.cur, fx.target);
+    fx.mods = presetFxMods(preset);
+    activeSceneId = preset.id;
+    commitStructure();
+    renderLayers();
+    renderFx();
+    renderDock();
+  }
+
+  renderScenes();
+  updateDeckLiveDisplay();
+  updateCueBadge();
+  touch();
+  showToast(`Assigned "${preset.name}" to Deck ${deckKey.toUpperCase()}`, 'info');
+}
+
+function setCrossfader(val) {
+  decks.crossfader = clamp(val, 0, 1);
+  const x = decks.crossfader;
+  const curve = decks.curve || 'smooth';
+
+  let wA = 1 - x, wB = x;
+  if (curve === 'smooth') {
+    wB = 3 * x * x - 2 * x * x * x;
+    wA = 1 - wB;
+  } else if (curve === 'additive') {
+    wA = Math.min(1, 2 * (1 - x));
+    wB = Math.min(1, 2 * x);
+  } else if (curve === 'cut') {
+    wA = x < 0.5 ? 1 : 0;
+    wB = x >= 0.5 ? 1 : 0;
+  }
+
+  const presetA = decks.a.preset || BUILTIN_PRESETS[0];
+  const presetB = decks.b.preset || BUILTIN_PRESETS[1] || BUILTIN_PRESETS[0];
+
+  if (presetA && presetB) {
+    const fxA = { ...FX_DEFAULTS, ...(presetA.fx || {}) };
+    const fxB = { ...FX_DEFAULTS, ...(presetB.fx || {}) };
+    const blendedFx = {};
+    for (const k of Object.keys(FX_DEFAULTS)) {
+      if (typeof fxA[k] === 'number' && typeof fxB[k] === 'number') {
+        blendedFx[k] = fxA[k] * wA + fxB[k] * wB;
+      } else {
+        blendedFx[k] = wA >= wB ? fxA[k] : fxB[k];
+      }
+    }
+    // Only blend active fx if in master view mode
+    if (decks.previewMode === 'master') {
+      fx.set(blendedFx);
+      syncFxSliders();
+    }
+  }
+
+  if (wA >= wB && decks.a.sceneId) {
+    activeSceneId = decks.a.sceneId;
+  } else if (wB > wA && decks.b.sceneId) {
+    activeSceneId = decks.b.sceneId;
+  }
+  updateTopSceneBadge();
+  updateDeckLiveDisplay();
+  updateCueBadge();
+}
+
+function updateDeckLiveDisplay() {
+  const pillA = $('deckLivePillA');
+  const pillB = $('deckLivePillB');
+  const cardA = $('deckCardA');
+  const cardB = $('deckCardB');
+  const x = decks.crossfader;
+
+  const isLiveA = x < 0.95;
+  const isLiveB = x > 0.05;
+  const isEditingA = decks.editDeck === 'a';
+  const isEditingB = decks.editDeck === 'b';
+
+  if (pillA) {
+    pillA.classList.toggle('on', isLiveA);
+    pillA.textContent = isLiveA ? 'LIVE' : 'CUE';
+  }
+  if (cardA) {
+    cardA.classList.toggle('active-live', isLiveA);
+    cardA.classList.toggle('editing-focus', isEditingA);
+  }
+
+  if (pillB) {
+    pillB.classList.toggle('on', isLiveB);
+    pillB.textContent = isLiveB ? 'LIVE' : 'CUE';
+  }
+  if (cardB) {
+    cardB.classList.toggle('active-live', isLiveB);
+    cardB.classList.toggle('editing-focus', isEditingB);
+  }
+}
+
+function updateCueBadge() {
+  const badge = $('cueBadge');
+  if (!badge) return;
+  const liveDeck = decks.crossfader >= 0.5 ? 'b' : 'a';
+  const cuedDeck = liveDeck === 'a' ? 'b' : 'a';
+  const isShowingCue = (decks.previewMode === 'cue') || (decks.previewMode === 'auto' && decks.editDeck === cuedDeck);
+  badge.hidden = !isShowingCue;
+  if (isShowingCue) {
+    badge.textContent = `CUE PREVIEW · DECK ${decks.editDeck.toUpperCase()}: "${decks[decks.editDeck].name}" (NOT ON BEAMER)`;
+  }
+}
+
+function autoFadeTo(targetDeck) {
+  const targetX = targetDeck === 'a' ? 0.0 : 1.0;
+  const startX = decks.crossfader;
+  if (Math.abs(startX - targetX) < 0.01) return;
+
+  const bpm = clock.bpm || 120.0;
+  const beats = decks.autoFadeBeats || 4;
+  const durationMs = ((beats * 60) / bpm) * 1000;
+  const startTime = performance.now();
+
+  decks.autoFading = true;
+  cancelAnimationFrame(autoFadeAnim);
+
+  function stepFade(now) {
+    const elapsed = now - startTime;
+    const prog = clamp(elapsed / durationMs, 0, 1);
+    const curX = startX + (targetX - startX) * prog;
+    setCrossfader(curX);
+
+    const xfaderSlider = $('crossfaderSlider');
+    if (xfaderSlider) xfaderSlider.value = curX;
+
+    if (prog < 1) {
+      autoFadeAnim = requestAnimationFrame(stepFade);
+    } else {
+      decks.autoFading = false;
+      setCrossfader(targetX);
+      renderScenes();
+      touch();
+    }
+  }
+  autoFadeAnim = requestAnimationFrame(stepFade);
+}
+
 function renderScenes() {
   const bottom = $('bottomPanel');
   if (!bottom) return;
@@ -1657,6 +2160,106 @@ function renderScenes() {
 
   clockDeck.append(clockHead, bpmRow, metronomeRow, loopRow, transportBar);
 
+  // ------------------------------------------------ CENTER: Dual Deck A/B Mixing Station
+  const dualDeckStation = h('div', { class: 'dual-deck-station' });
+
+  const isEditingA = decks.editDeck === 'a';
+  const isEditingB = decks.editDeck === 'b';
+  const isLiveA = decks.crossfader < 0.95;
+  const isLiveB = decks.crossfader > 0.05;
+
+  // Deck A Card
+  const deckACard = h('div', {
+    class: `deck-card deck-a${isLiveA ? ' active-live' : ''}${isEditingA ? ' editing-focus' : ''}`,
+    id: 'deckCardA',
+    title: 'Deck A · Click to inspect, preview & edit Deck A',
+    onclick: () => switchEditDeck('a'),
+  },
+    h('div', { class: 'deck-label-row' },
+      h('span', { class: 'deck-tag' }, 'DECK A'),
+      h('div', { style: { display: 'flex', gap: '3px', alignItems: 'center' } },
+        isEditingA ? h('span', { class: 'deck-edit-badge' }, 'EDITING') : null,
+        h('span', { class: `deck-live-pill${isLiveA ? ' on' : ''}`, id: 'deckLivePillA' }, isLiveA ? 'LIVE' : 'CUE')
+      )
+    ),
+    h('span', { class: 'deck-scene-title' }, decks.a.name || 'None'),
+    h('div', { style: { display: 'flex', gap: '3px', marginTop: '3px' } },
+      button('Edit', () => switchEditDeck('a'), 'mini' + (isEditingA ? ' primary' : '')),
+      button('Cut 100%', () => { setCrossfader(0.0); const sl = $('crossfaderSlider'); if (sl) sl.value = 0; renderScenes(); }, 'mini')
+    )
+  );
+
+  // Crossfader Controls
+  const xfaderControls = h('div', { class: 'xfader-controls' });
+
+  const curveSelect = h('select', {
+    class: 'select-input',
+    style: { height: '18px', fontSize: '9px', padding: '0 4px', margin: 0 },
+    onchange: (e) => { decks.curve = e.target.value; setCrossfader(decks.crossfader); touch(); }
+  },
+    h('option', { value: 'smooth', selected: decks.curve === 'smooth' }, 'Smooth'),
+    h('option', { value: 'additive', selected: decks.curve === 'additive' }, 'Additive'),
+    h('option', { value: 'cut', selected: decks.curve === 'cut' }, 'Cut')
+  );
+
+  const xfaderHeader = h('div', { class: 'xfader-header' },
+    h('span', {}, '◄ A'),
+    curveSelect,
+    h('span', {}, 'B ►')
+  );
+
+  const xfaderSlider = h('input', {
+    type: 'range', class: 'xfader-slider', id: 'crossfaderSlider',
+    min: 0, max: 1, step: 0.01, value: decks.crossfader,
+    oninput: (e) => setCrossfader(parseFloat(e.target.value)),
+  });
+
+  const xfaderSliderWrap = h('div', { class: 'xfader-slider-wrap' }, xfaderSlider);
+
+  const autoABtn = h('button', {
+    class: 'xfader-btn', id: 'autoFadeABtn',
+    title: `Auto-fade to Deck A over ${decks.autoFadeBeats} beats`,
+    onclick: () => autoFadeTo('a')
+  }, '◄ AUTO A');
+
+  const beatQuantSeg = segmented({
+    options: [[1, '1B'], [4, '4B'], [8, '8B'], [16, '16B']],
+    value: decks.autoFadeBeats || 4,
+    onChange: (b) => { decks.autoFadeBeats = Number(b); touch(); }
+  });
+
+  const autoBBtn = h('button', {
+    class: 'xfader-btn', id: 'autoFadeBBtn',
+    title: `Auto-fade to Deck B over ${decks.autoFadeBeats} beats`,
+    onclick: () => autoFadeTo('b')
+  }, 'AUTO B ►');
+
+  const xfaderBtnRow = h('div', { class: 'xfader-btn-row' }, autoABtn, beatQuantSeg.el, autoBBtn);
+  xfaderControls.append(xfaderHeader, xfaderSliderWrap, xfaderBtnRow);
+
+  // Deck B Card
+  const deckBCard = h('div', {
+    class: `deck-card deck-b${isLiveB ? ' active-live' : ''}${isEditingB ? ' editing-focus' : ''}`,
+    id: 'deckCardB',
+    title: 'Deck B · Click to inspect, preview & edit Deck B (Cued Scene)',
+    onclick: () => switchEditDeck('b'),
+  },
+    h('div', { class: 'deck-label-row' },
+      h('span', { class: 'deck-tag' }, 'DECK B'),
+      h('div', { style: { display: 'flex', gap: '3px', alignItems: 'center' } },
+        isEditingB ? h('span', { class: 'deck-edit-badge' }, 'EDITING') : null,
+        h('span', { class: `deck-live-pill${isLiveB ? ' on' : ''}`, id: 'deckLivePillB' }, isLiveB ? 'LIVE' : 'CUE')
+      )
+    ),
+    h('span', { class: 'deck-scene-title' }, decks.b.name || 'None'),
+    h('div', { style: { display: 'flex', gap: '3px', marginTop: '3px' } },
+      button('Edit', () => switchEditDeck('b'), 'mini' + (isEditingB ? ' primary' : '')),
+      button('Cut 100%', () => { setCrossfader(1.0); const sl = $('crossfaderSlider'); if (sl) sl.value = 1; renderScenes(); }, 'mini')
+    )
+  );
+
+  dualDeckStation.append(deckACard, xfaderControls, deckBCard);
+
   // ------------------------------------------------ RIGHT: Scene Selector Timeline Strip
   const sceneDeck = h('div', { class: 'scene-deck' });
 
@@ -1712,6 +2315,16 @@ function renderScenes() {
       h('span', { class: 'shade' }),
       i < 9 ? h('kbd', { class: 'key' }, String(i + 1)) : null,
       isActive ? h('span', { class: 'live-badge' }, 'LIVE') : null,
+      h('div', { class: 'deck-assign-badges' },
+        h('button', {
+          class: 'deck-assign-btn', title: `Load "${p.name}" to Deck A`,
+          onclick: (e) => { e.stopPropagation(); assignToDeck('a', p); }
+        }, '→A'),
+        h('button', {
+          class: 'deck-assign-btn btn-b', title: `Load "${p.name}" to Deck B`,
+          onclick: (e) => { e.stopPropagation(); assignToDeck('b', p); }
+        }, '→B')
+      ),
       h('span', { class: 'nm' }, p.name),
       h('div', { class: 'scene-actions' },
         h('button', {
@@ -1736,7 +2349,7 @@ function renderScenes() {
   });
 
   sceneDeck.append(sceneDeckHead, stripScroll);
-  bottom.append(clockDeck, sceneDeck);
+  bottom.append(clockDeck, dualDeckStation, sceneDeck);
 }
 
 /* ----------------------------------------------------------------- audio */
@@ -1876,12 +2489,12 @@ function renderOutput() {
     const opts = [...displays.map((d) => [String(d.id), `${d.label}${d.primary ? ' (this screen)' : ''} · ${d.width}×${d.height}`]), ['window', 'Window (drag it yourself)']];
     sec.append(select({ label: 'Show on', options: opts, value: settings.display || 'window', onChange: (v) => { settings.display = v; touch(); } }).el);
     sec.append(h('div', { class: 'btnrow' },
-      button(out.connected ? 'Close output' : 'Open output', toggleOutput, out.connected ? '' : 'primary'),
+      button((out.isOpen || out.connected) ? 'Close output' : 'Open output', toggleOutput, (out.isOpen || out.connected) ? 'danger' : 'primary'),
       button('Fullscreen', () => bridge.toggleFullscreen(), '', 'Toggle fullscreen on the screen the window is on'),
     ));
     if (displays.length < 2) sec.append(h('p', { class: 'hint' }, 'Only one screen found. Connect the beamer and it shows up here automatically.'));
   } else {
-    sec.append(h('div', { class: 'btnrow' }, button(out.connected ? 'Close output' : 'Open output', toggleOutput, out.connected ? '' : 'primary')));
+    sec.append(h('div', { class: 'btnrow' }, button((out.isOpen || out.connected) ? 'Close output' : 'Open output', toggleOutput, (out.isOpen || out.connected) ? 'danger' : 'primary')));
     sec.append(h('p', { class: 'hint' }, 'Drag the output window to the beamer, then double-click it for fullscreen.'));
   }
   root.append(sec);
@@ -1909,12 +2522,36 @@ function renderOutput() {
 
 let prevSpeed = 1;
 addEventListener('keydown', (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.metaKey || e.ctrlKey) {
+    const k = e.key.toLowerCase();
+    if (k === 's') {
+      e.preventDefault();
+      saveActiveProject(e.shiftKey);
+      return;
+    }
+    if (k === 'o') {
+      e.preventDefault();
+      $('projectFileInput')?.click();
+      return;
+    }
+    if (k === 'n') {
+      e.preventDefault();
+      showNewProjectDialog();
+      return;
+    }
+    return;
+  }
+  if (e.altKey) return;
   const t = e.target;
   if (t instanceof HTMLInputElement && t.type !== 'range' && t.type !== 'checkbox' && t.type !== 'color') return;
   if (t instanceof HTMLSelectElement) return;
   const k = e.key;
-  if (k === 'Escape') { $('help').hidden = true; return; }
+  if (k === 'Escape') {
+    $('help').hidden = true;
+    closeWelcomeHub();
+    closeNewProjectDialog();
+    return;
+  }
   if (k === ' ') {
     e.preventDefault();
     if (fx.target.speed > 0) { prevSpeed = fx.target.speed; fx.set({ speed: 0 }); } else fx.set({ speed: prevSpeed || 1 });
@@ -1993,7 +2630,8 @@ fitStage();
 if (bridge) {
   refreshDisplays();
   bridge.onDisplays((d) => { displays = d; refreshDisplays(); });
-  bridge.onOutputClosed(() => { out.connected = false; renderTopActions(); renderOutput(); });
+  bridge.onOutputOpened(() => { out.isOpen = true; sendInit(); renderTopActions(); renderOutput(); });
+  bridge.onOutputClosed(() => { out.isOpen = false; out.connected = false; renderTopActions(); renderOutput(); });
 }
 setInterval(() => { if (out.connected) { updateStatus(); updateOutputCard(); } }, 1000);
 updateAudioStatus();
@@ -2001,8 +2639,52 @@ updateTopSceneBadge();
 onAudioChange(() => { renderAudio(); updateAudioStatus(); });
 refreshDevices();
 if (audioCfg.on) startAudio();
+
+// ------------------------------------------------ project hub & onboarding wiring
+$('projectPill')?.addEventListener('click', openWelcomeHub);
+$('welcomeDemoBtn')?.addEventListener('click', loadShowcaseProject);
+$('welcomeNewBtn')?.addEventListener('click', () => { closeWelcomeHub(); showNewProjectDialog(); });
+$('welcomeOpenBtn')?.addEventListener('click', () => $('projectFileInput')?.click());
+$('welcomeClose')?.addEventListener('click', closeWelcomeHub);
+$('welcomeDismissBtn')?.addEventListener('click', closeWelcomeHub);
+$('welcomeStartupPref')?.addEventListener('change', (e) => projectMgr.setShowWelcomeOnStartup(e.target.checked));
+
+$('newProjCreateBtn')?.addEventListener('click', createNewProjectFromDialog);
+$('newProjCancelBtn')?.addEventListener('click', closeNewProjectDialog);
+$('newProjectClose')?.addEventListener('click', closeNewProjectDialog);
+
+$('projectFileInput')?.addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  e.target.value = '';
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const pkg = projectMgr.unpackageProject(reader.result);
+      applyProjectPackage(pkg);
+      closeWelcomeHub();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+  reader.readAsText(file);
+});
+
+projectMgr.onDirtyChange(() => updateProjectNameDisplay());
+projectMgr.initAutosave(() => {
+  return projectMgr.packageProject({
+    settings, clock, brush, audioCfg, lfo: master,
+    scenes: allPresets(), activeSceneId, config, fx: fx.target, fxMods: fx.mods,
+  }, makeThumb());
+});
+updateProjectNameDisplay();
+
+if (projectMgr.shouldShowWelcomeOnStartup()) {
+  openWelcomeHub();
+}
+
 requestAnimationFrame(frame);
 window.__lumen = {
-  fx, config, scene, brush, mouse, settings, out, get fps() { return fpsAvg; }, applyPreset,
+  fx, config, scene, brush, mouse, settings, out, projectMgr, get fps() { return fpsAvg; }, applyPreset,
   audio: { cfg: audioCfg, state: audioState, levels, ctx: audioContext, input: audioInputNode, start: startAudio, stop: stopAudio, update: updateAudio },
 };

@@ -8,12 +8,18 @@ class UniversalBridge {
     this.displays = [];
     this.displayListeners = new Set();
     this.closeListeners = new Set();
+    this.openListeners = new Set();
     this.init();
   }
 
   async init() {
     if (typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.event) {
       try {
+        await window.__TAURI__.event.listen('projector:opened', () => {
+          this.openListeners.forEach((fn) => {
+            try { fn(); } catch (e) { console.error(e); }
+          });
+        });
         await window.__TAURI__.event.listen('projector:closed', () => {
           this.closeListeners.forEach((fn) => {
             try { fn(); } catch (e) { console.error(e); }
@@ -101,6 +107,10 @@ class UniversalBridge {
   onDisplays(cb) {
     this.displayListeners.add(cb);
     this.listDisplays().then(cb).catch(console.error);
+  }
+
+  onOutputOpened(cb) {
+    this.openListeners.add(cb);
   }
 
   onOutputClosed(cb) {

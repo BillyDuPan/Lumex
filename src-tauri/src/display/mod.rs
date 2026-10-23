@@ -97,11 +97,21 @@ impl EngineState {
         let monitor = dm.target_monitor_for_projector(app)?;
         let chosen_idx = dm.selected_index();
 
+        let primary_idx = dm.primary_monitor().map(|p| p.index).unwrap_or(0);
+        let _has_secondary = dm.monitors().len() > 1;
+        let _is_target_primary = chosen_idx == primary_idx;
+
+        // Default to a floating windowed display mode with full OS decorations and taskbar icon
+        // so the user has immediate control, visibility, and never gets trapped or blocked.
+        // Fullscreen can be engaged at any moment via Fullscreen button, F11, or double-click.
+        let borderless = false;
+        let always_on_top = false;
+
         let config = ProjectorConfig {
-            title: "Lumex Projector Output".into(),
+            title: "Lumex - Output".into(),
             monitor_index: chosen_idx,
-            borderless_fullscreen: true,
-            always_on_top: true,
+            borderless_fullscreen: borderless,
+            always_on_top,
             vsync: true,
         };
 

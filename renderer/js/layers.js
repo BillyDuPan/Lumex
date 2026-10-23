@@ -1000,6 +1000,247 @@ class LifeLayer extends Layer {
   }
 }
 
+/* ------------------------------------------------------------------ video */
+
+const PLAYBACK_MODES = [
+  ['loop', 'Loop'], ['bounce', 'Bounce'], ['once', 'Once'],
+];
+const BEAT_BAR_OPTIONS = [
+  [1, '1 Beat'], [2, '2 Beats'], [4, '4 Beats'], [8, '8 Beats'], [16, '16 Beats'], [32, '32 Beats'],
+];
+
+export class VideoLayer extends Layer {
+  onInit() {
+    this.video = document.createElement('video');
+    this.video.crossOrigin = 'anonymous';
+    this.video.playsInline = true;
+    this.video.muted = true;
+    this.video.preload = 'auto';
+    this.videoReady = false;
+    this.bounceDir = 1;
+    this.lastSrc = null;
+
+    this.video.addEventListener('loadeddata', () => {
+      this.videoReady = true;
+      if (this.video.paused) this.video.play().catch(() => {});
+    });
+    this.video.addEventListener('canplay', () => {
+      this.videoReady = true;
+      if (this.video.paused) this.video.play().catch(() => {});
+    });
+    this.video.addEventListener('error', () => {
+      this.videoReady = false;
+    });
+    this.syncSrc();
+  }
+
+  syncSrc() {
+    const src = this.p.src;
+    if (src && src !== this.lastSrc) {
+      this.lastSrc = src;
+      this.videoReady = false;
+      this.video.src = src;
+      this.video.load();
+      this.video.play().catch(() => {});
+    }
+  }
+
+  update(dt, t) {
+    this.syncSrc();
+    if (!this.videoReady || !this.video.duration) return;
+
+    const p = this.p;
+    const dur = this.video.duration;
+    const inTime = (p.inPoint || 0) * dur;
+    const outTime = Math.max(inTime + 0.1, (p.outPoint !== undefined ? p.outPoint : 1.0) * dur);
+
+    let targetRate = p.rate !== undefined ? p.rate : 1.0;
+    if (p.bpmSync && window.__lumen?.clock?.bpm) {
+      const bpm = window.__lumen.clock.bpm;
+      const beatBars = p.beatBars || 4;
+      const targetDurationSec = (beatBars * 60) / bpm;
+      const loopSpanSec = outTime - inTime;
+      targetRate = clamp(loopSpanSec / targetDurationSec, 0.1, 8.0);
+    }
+
+    if (p.playback === 'bounce') {
+      if (this.video.currentTime >= outTime && this.bounceDir > 0) {
+        this.bounceDir = -1;
+      } else if (this.video.currentTime <= inTime && this.bounceDir < 0) {
+        this.bounceDir = 1;
+      }
+      this.video.playbackRate = targetRate;
+      if (this.bounceDir < 0) {
+        this.video.currentTime = Math.max(inTime, this.video.currentTime - dt * targetRate);
+      }
+    } else if (p.playback === 'once') {
+      this.video.loop = false;
+      this.video.playbackRate = targetRate;
+      if (this.video.currentTime >= outTime) {
+        this.video.pause();
+      }
+    } else {
+      this.video.playbackRate = targetRate;
+      if (this.video.currentTime >= outTime || this.video.currentTime < inTime) {
+        this.video.currentTime = inTime;
+      }
+      if (this.video.paused) this.video.play().catch(() => {});
+    }
+  }
+
+  render(t) {
+    const { ctx, W, H, p } = this;
+    ctx.clearRect(0, 0, W, H);
+    if (!this.videoReady || this.video.readyState < 2) return;
+
+    const vw = this.video.videoWidth || W;
+    const vh = this.video.videoHeight || H;
+    if (!vw || !vh) return;
+
+    ctx.save();
+
+    let filters = [];
+    if (p.invert) filters.push(`invert(${(p.invert * 100).toFixed(0)}%)`);
+    if (p.contrast !== undefined && p.contrast !== 1) filters.push(`contrast(${(p.contrast * 100).toFixed(0)}%)`);
+    if (p.brightness !== undefined && p.brightness !== 1) filters.push(`brightness(${(p.brightness * 100).toFixed(0)}%)`);
+    if (p.sat !== undefined && p.sat !== 1) filters.push(`saturate(${(p.sat * 100).toFixed(0)}%)`);
+    if (filters.length) ctx.filter = filters.join(' ');
+
+    const framing = p.framing || 'cover';
+    const scale = p.zoom || 1.0;
+    const rot = (p.rot || 0) * (Math.PI / 180);
+    const px = (p.panX || 0) * W;
+    const py = (p.panY || 0) * H;
+
+    ctx.translate(W * 0.5 + px, H * 0.5 + py);
+    if (rot) ctx.rotate(rot);
+
+    let dw = W, dh = H;
+    if (framing === 'cover') {
+      const s = Math.max(W / vw, H / vh) * scale;
+      dw = vw * s; dh = vh * s;
+    } else if (framing === 'fit') {
+      const s = Math.min(W / vw, H / vh) * scale;
+      dw = vw * s; dh = vh * s;
+    } else if (framing === 'center') {
+      dw = vw * scale; dh = vh * scale;
+    } else {
+      dw = W * scale; dh = H * scale;
+    }
+
+    ctx.drawImage(this.video, -dw * 0.5, -dh * 0.5, dw, dh);
+    ctx.restore();
+  }
+}
+
+/* ----------------------------------------------------------------- camera */
+
+export class CameraLayer extends Layer {
+  onInit() {
+    this.video = document.createElement('video');
+    this.video.playsInline = true;
+    this.video.muted = true;
+    this.stream = null;
+    this.cameraReady = false;
+    this.currentDeviceId = null;
+    this.syncStream();
+  }
+
+  async syncStream() {
+    const devId = this.p.deviceId || 'default';
+    if (this.stream && this.currentDeviceId === devId) return;
+    this.currentDeviceId = devId;
+
+    if (this.stream) {
+      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
+
+    try {
+      const constraints = {
+        video: devId && devId !== 'default' ? { deviceId: { exact: devId } } : true,
+        audio: false,
+      };
+      this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.video.srcObject = this.stream;
+      await this.video.play().catch(() => {});
+      this.cameraReady = true;
+    } catch (err) {
+      console.warn('[CameraLayer] Camera access failed:', err);
+      this.cameraReady = false;
+    }
+  }
+
+  update(dt, t) {
+    this.syncStream();
+  }
+
+  render(t) {
+    const { ctx, W, H, p } = this;
+    ctx.clearRect(0, 0, W, H);
+    if (!this.cameraReady || this.video.readyState < 2) return;
+
+    const vw = this.video.videoWidth || W;
+    const vh = this.video.videoHeight || H;
+    if (!vw || !vh) return;
+
+    ctx.save();
+
+    const flipH = p.flipH !== false ? -1 : 1;
+    const flipV = p.flipV ? -1 : 1;
+
+    let filters = [];
+    if (p.invert) filters.push(`invert(${(p.invert * 100).toFixed(0)}%)`);
+    if (p.contrast !== undefined && p.contrast !== 1) filters.push(`contrast(${(p.contrast * 100).toFixed(0)}%)`);
+    if (p.brightness !== undefined && p.brightness !== 1) filters.push(`brightness(${(p.brightness * 100).toFixed(0)}%)`);
+    if (p.sat !== undefined && p.sat !== 1) filters.push(`saturate(${(p.sat * 100).toFixed(0)}%)`);
+    if (filters.length) ctx.filter = filters.join(' ');
+
+    const framing = p.framing || 'cover';
+    const scale = p.zoom || 1.0;
+    const rot = (p.rot || 0) * (Math.PI / 180);
+    const px = (p.panX || 0) * W;
+    const py = (p.panY || 0) * H;
+
+    ctx.translate(W * 0.5 + px, H * 0.5 + py);
+    ctx.scale(flipH, flipV);
+    if (rot) ctx.rotate(rot);
+
+    let dw = W, dh = H;
+    if (framing === 'cover') {
+      const s = Math.max(W / vw, H / vh) * scale;
+      dw = vw * s; dh = vh * s;
+    } else if (framing === 'fit') {
+      const s = Math.min(W / vw, H / vh) * scale;
+      dw = vw * s; dh = vh * s;
+    } else {
+      dw = W * scale; dh = H * scale;
+    }
+
+    ctx.drawImage(this.video, -dw * 0.5, -dh * 0.5, dw, dh);
+    ctx.restore();
+
+    if (p.lumaKey > 0.01) {
+      try {
+        const imgData = ctx.getImageData(0, 0, W, H);
+        const data = imgData.data;
+        const thresh = p.lumaKey * 255;
+        const soft = (p.lumaSoft || 0.1) * 255 + 1;
+        for (let i = 0; i < data.length; i += 4) {
+          const luma = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+          if (luma < thresh) {
+            const alphaFactor = Math.max(0, (luma - (thresh - soft)) / soft);
+            data[i + 3] = Math.round(data[i + 3] * alphaFactor);
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+      } catch { /* canvas access exception */ }
+    }
+  }
+}
+
 /* --------------------------------------------------------------- registry */
 
 const MOUSE_MODES = [['off', 'Off'], ['repel', 'Repel'], ['attract', 'Attract'], ['swirl', 'Swirl'], ['stir', 'Stir']];
@@ -1128,6 +1369,55 @@ export const LAYER_TYPES = {
       { key: 'mouse', label: 'Behavior', type: 'segmented', options: LIFE_MODES },
       { key: 'mouseRadius', label: 'Reach', min: 0.05, max: 0.8, step: 0.01 },
       { key: 'mouseForce', label: 'Strength', min: 0, max: 2, step: 0.01 },
+    ],
+  },
+  video: {
+    label: 'Video Playback', Class: VideoLayer, blend: 'source-over',
+    defaults: {
+      src: '', playback: 'loop', rate: 1.0, bpmSync: false, beatBars: 4,
+      inPoint: 0.0, outPoint: 1.0, framing: 'cover', zoom: 1.0, rot: 0,
+      panX: 0, panY: 0, invert: 0, contrast: 1.0, brightness: 1.0, sat: 1.0,
+    },
+    schema: [
+      { key: 'playback', label: 'Playback mode', type: 'segmented', options: PLAYBACK_MODES },
+      { key: 'rate', label: 'Speed', min: -2, max: 4, step: 0.05, fmt: (v) => v.toFixed(2) + 'x' },
+      { key: 'bpmSync', label: 'Tempo sync (BPM)', type: 'toggle' },
+      { key: 'beatBars', label: 'Loop beats', type: 'segmented', options: BEAT_BAR_OPTIONS },
+      { key: 'framing', label: 'Framing', type: 'segmented', options: FRAMING_OPTIONS },
+      { key: 'zoom', label: 'Zoom', min: 0.2, max: 4, step: 0.01, fmt: (v) => (v * 100).toFixed(0) + '%' },
+      { key: 'rot', label: 'Angle', min: -180, max: 180, step: 1, unit: '°' },
+      { key: 'panX', label: 'Pan X', min: -1, max: 1, step: 0.01 },
+      { key: 'panY', label: 'Pan Y', min: -1, max: 1, step: 0.01 },
+      { group: 'Color Processing' },
+      { key: 'invert', label: 'Invert', min: 0, max: 1, step: 0.01, fmt: (v) => (v * 100).toFixed(0) + '%' },
+      { key: 'contrast', label: 'Contrast', min: 0.2, max: 3, step: 0.01 },
+      { key: 'brightness', label: 'Brightness', min: 0.2, max: 2.5, step: 0.01 },
+      { key: 'sat', label: 'Saturation', min: 0, max: 3, step: 0.01 },
+    ],
+  },
+  camera: {
+    label: 'Live Camera', Class: CameraLayer, blend: 'source-over',
+    defaults: {
+      deviceId: 'default', flipH: true, flipV: false, framing: 'cover',
+      zoom: 1.0, rot: 0, panX: 0, panY: 0, lumaKey: 0.0, lumaSoft: 0.1,
+      invert: 0, contrast: 1.0, brightness: 1.0, sat: 1.0,
+    },
+    schema: [
+      { key: 'flipH', label: 'Mirror horizontal', type: 'toggle' },
+      { key: 'flipV', label: 'Mirror vertical', type: 'toggle' },
+      { key: 'framing', label: 'Framing', type: 'segmented', options: FRAMING_OPTIONS },
+      { key: 'zoom', label: 'Zoom', min: 0.2, max: 4, step: 0.01, fmt: (v) => (v * 100).toFixed(0) + '%' },
+      { key: 'rot', label: 'Angle', min: -180, max: 180, step: 1, unit: '°' },
+      { key: 'panX', label: 'Pan X', min: -1, max: 1, step: 0.01 },
+      { key: 'panY', label: 'Pan Y', min: -1, max: 1, step: 0.01 },
+      { group: 'Live Keying' },
+      { key: 'lumaKey', label: 'Luma key cutoff', min: 0, max: 0.95, step: 0.01, fmt: (v) => (v * 100).toFixed(0) + '%' },
+      { key: 'lumaSoft', label: 'Key softness', min: 0.01, max: 0.4, step: 0.01 },
+      { group: 'Color Processing' },
+      { key: 'invert', label: 'Invert', min: 0, max: 1, step: 0.01, fmt: (v) => (v * 100).toFixed(0) + '%' },
+      { key: 'contrast', label: 'Contrast', min: 0.2, max: 3, step: 0.01 },
+      { key: 'brightness', label: 'Brightness', min: 0.2, max: 2.5, step: 0.01 },
+      { key: 'sat', label: 'Saturation', min: 0, max: 3, step: 0.01 },
     ],
   },
 };

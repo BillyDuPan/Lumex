@@ -109,27 +109,92 @@ link.on((msg) => {
       grid.style.display = msg.on ? 'block' : 'none';
       break;
     case 'close':
-      window.close();
+      closeOutputWindow();
       break;
   }
 });
 
+function closeOutputWindow() {
+  try {
+    link.send({ type: 'bye' });
+  } catch (_) {}
+  if (typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.core) {
+    window.__TAURI__.core.invoke('close_projector').catch(() => {
+      try {
+        window.__TAURI__.window?.getCurrentWindow()?.close().catch(() => {});
+      } catch (_) {}
+    });
+  } else {
+    window.close();
+  }
+}
+
+async function toggleFullscreen() {
+  if (typeof window !== 'undefined' && window.__TAURI__ && window.__TAURI__.core) {
+    try {
+      await window.__TAURI__.core.invoke('toggle_projector_fullscreen');
+      return;
+    } catch (_) {}
+  }
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  } else {
+    document.documentElement.requestFullscreen?.().catch(() => {});
+  }
+}
+
 function hello() {
+  if (document.hidden) return;
   if (!ready) link.send({ type: 'hello', w: innerWidth, h: innerHeight });
 }
 
 function report() {
+  if (document.hidden) return;
   link.send({ type: 'alive', w: innerWidth, h: innerHeight, fps: frames });
   frames = 0;
 }
 
 addEventListener('resize', () => { fit(); report(); });
-addEventListener('pagehide', () => link.send({ type: 'bye' }));
-addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
-addEventListener('dblclick', () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen?.().catch(() => {});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    fit();
+    hello();
+    report();
+  }
 });
+addEventListener('pagehide', () => {
+  try { link.send({ type: 'bye' }); } catch (_) {}
+});
+
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeOutputWindow();
+  } else if (e.key === 'F11') {
+    e.preventDefault();
+    toggleFullscreen();
+  }
+});
+
+addEventListener('dblclick', (e) => {
+  if (e.target && e.target.closest && e.target.closest('.out-toolbar')) return;
+  toggleFullscreen();
+});
+
+document.getElementById('btn-close-out')?.addEventListener('click', closeOutputWindow);
+document.getElementById('btn-toggle-fs')?.addEventListener('click', toggleFullscreen);
+
+let cursorTimer = null;
+function showCursor() {
+  document.body.classList.remove('cursor-hidden');
+  clearTimeout(cursorTimer);
+  cursorTimer = setTimeout(() => {
+    if (frame) {
+      document.body.classList.add('cursor-hidden');
+    }
+  }, 2500);
+}
+window.addEventListener('mousemove', showCursor);
+window.addEventListener('mousedown', showCursor);
 
 let last = performance.now();
 function tick(now) {
@@ -146,10 +211,10 @@ function tick(now) {
   if (!wait.classList.contains('gone')) wait.classList.add('gone');
 }
 
-window.__lumenOut = { get scene() { return scene; }, pipe, get frame() { return frame; } };
+window.__lumenOut = { get scene() { return scene; }, pipe, get frame() { return frame; }, closeOutputWindow, toggleFullscreen };
 
 fit();
 hello();
-setInterval(hello, 700);
+setInterval(hello, 500);
 setInterval(report, 1000);
 requestAnimationFrame(tick);

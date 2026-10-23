@@ -15,6 +15,11 @@
         <span class="brand-name">Lumex</span>
         <span class="brand-tag">PRO</span>
       </div>
+      <div class="project-pill" id="projectPill" title="Project Menu · Click to open Welcome Hub (Ctrl+S to save)">
+        <span class="project-icon">&#128193;</span>
+        <span class="proj-name" id="projectName">Showcase Project</span>
+        <span class="dirty-dot" id="dirtyDot" hidden>•</span>
+      </div>
       <div class="topbar-status-group">
         <div class="status monitor-status" id="status" title="Output monitor status"><i></i><span>Output closed</span></div>
         <div class="status pill" id="audioStatus" title="Audio input · click to open"><i></i><span>Audio off</span></div>
@@ -31,26 +36,28 @@
       <!-- Left Vertical Toolbar (Adobe Style) -->
       <aside class="left-toolbar" id="leftToolbar"></aside>
 
-      <section class="stage-col">
-        <div class="stage" id="stage">
-          <div class="frame" id="frame">
-            <canvas id="gl"></canvas>
-            <div class="cursor" id="cursor"></div>
-            <div class="monitor-hud">
-              <span class="hud-res" id="hudRes">1280×720</span>
-              <span class="hud-fps" id="hudFps">60 FPS</span>
-            </div>
-            <div class="badge" id="blackBadge">Blackout</div>
+      <!-- Main Stage Preview -->
+      <section class="stage" id="stage">
+        <div class="frame" id="frame">
+          <canvas id="gl"></canvas>
+          <div class="cursor" id="cursor"></div>
+          <div class="monitor-hud">
+            <span class="hud-res" id="hudRes">1280×720</span>
+            <span class="hud-fps" id="hudFps">60 FPS</span>
           </div>
+          <div class="badge cue-badge" id="cueBadge" hidden>CUE PREVIEW · DECK B</div>
+          <div class="badge" id="blackBadge">Blackout</div>
         </div>
-        <!-- Bottom Panel: Central Beat Clock & Scene Timeline Selector -->
-        <section class="bottom-panel" id="bottomPanel"></section>
       </section>
 
+      <!-- Right Inspector Sidebar -->
       <aside class="side">
         <nav class="tabs" id="tabs"></nav>
         <div class="panel" id="panel"></div>
       </aside>
+
+      <!-- Bottom Panel spanning across stage and under right sidebar -->
+      <section class="bottom-panel" id="bottomPanel"></section>
     </main>
   </div>
 
@@ -93,6 +100,112 @@
       <div class="scene-editor-body" id="sceneEditBody"></div>
     </div>
   </div>
+
+  <!-- Welcome & Project Hub Modal (Adobe Premiere / Ableton Style) -->
+  <div class="modal-backdrop" id="welcomeModal" hidden>
+    <div class="welcome-card">
+      <div class="welcome-head">
+        <div class="welcome-brand">
+          <span class="adobe-badge">Lx</span>
+          <div class="welcome-title-wrap">
+            <h2>Welcome to Lumex Pro</h2>
+            <span class="welcome-subtitle">Live Creative Visual Performance Suite · v2.0</span>
+          </div>
+        </div>
+        <button class="mini-btn close-x" id="welcomeClose" title="Close to active workspace">&times;</button>
+      </div>
+      <div class="welcome-body">
+        <div class="welcome-col-actions">
+          <h3 class="welcome-sec-title">Get Started</h3>
+          
+          <button class="welcome-action-card featured" id="welcomeDemoBtn">
+            <div class="w-card-icon star-icon">&#9733;</div>
+            <div class="w-card-content">
+              <b>Explore Showcase Project</b>
+              <span>Instant playground with 7 pre-made scenes, audio reactivity & visuals ready to perform</span>
+            </div>
+          </button>
+
+          <button class="welcome-action-card" id="welcomeNewBtn">
+            <div class="w-card-icon plus-icon">&#65291;</div>
+            <div class="w-card-content">
+              <b>Create New Blank Project</b>
+              <span>Clean canvas with custom name, resolution, aspect ratio & master BPM</span>
+            </div>
+          </button>
+
+          <button class="welcome-action-card" id="welcomeOpenBtn">
+            <div class="w-card-icon folder-icon">&#128194;</div>
+            <div class="w-card-content">
+              <b>Open Project Package (.lumex)…</b>
+              <span>Load self-contained project package with bundled assets</span>
+            </div>
+          </button>
+        </div>
+
+        <div class="welcome-col-recent">
+          <div class="recent-head">
+            <h3 class="welcome-sec-title">Recent Projects</h3>
+            <span class="recent-hint" id="recentHint">Stored locally</span>
+          </div>
+          <div class="recent-projects-list" id="recentProjectsList">
+            <!-- Dynamic recent project items -->
+          </div>
+        </div>
+      </div>
+      <div class="welcome-footer">
+        <label class="welcome-checkbox-label">
+          <input type="checkbox" id="welcomeStartupPref" checked>
+          <span>Always show this Welcome Hub on startup</span>
+        </label>
+        <div class="welcome-footer-btns">
+          <button class="btn secondary" id="welcomeDismissBtn">Continue to Workspace</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Project Setup Modal -->
+  <div class="modal-backdrop" id="newProjectModal" hidden>
+    <div class="dialog-card">
+      <div class="dialog-head">
+        <h3>New Visual Project</h3>
+        <button class="mini-btn close-x" id="newProjectClose">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <div class="dialog-field">
+          <label>Project Name</label>
+          <input type="text" id="newProjNameInput" class="text-input" value="Untitled Project" placeholder="e.g. Festival Mainstage 2026">
+        </div>
+        <div class="dialog-field-row">
+          <div class="dialog-field">
+            <label>Aspect Ratio</label>
+            <select id="newProjAspectSelect" class="select-input">
+              <option value="16:9" selected>16:9 Widescreen (Stage / Beamer)</option>
+              <option value="4:3">4:3 Classic</option>
+              <option value="9:16">9:16 Vertical (LED Columns / Mobile)</option>
+              <option value="1:1">1:1 Square</option>
+              <option value="21:9">21:9 UltraWide</option>
+            </select>
+          </div>
+          <div class="dialog-field">
+            <label>Master BPM</label>
+            <input type="number" id="newProjBpmInput" class="text-input" value="124" min="40" max="220" step="1">
+          </div>
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button class="btn secondary" id="newProjCancelBtn">Cancel</button>
+        <button class="btn primary" id="newProjCreateBtn">Create Project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Project File Input (Hidden) -->
+  <input type="file" id="projectFileInput" accept=".lumex,.json,application/json" hidden>
+
+  <!-- Video Clip File Input (Hidden) -->
+  <input type="file" id="videoFileInput" accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov" hidden>
 
   <!-- Import Scene hidden input -->
   <input type="file" id="sceneImportInput" accept=".json,application/json" hidden>

@@ -6,22 +6,104 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' ipc: tauri: http: https: blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ipc: tauri: http: https: ws: wss: blob: data:;">
   <style>
-    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
-    body { display: grid; place-items: center; }
-    canvas { display: block; grid-area: 1 / 1; }
-    #grid { pointer-events: none; display: none; }
-    #wait {
-      grid-area: 1 / 1; z-index: 2; color: #6b7080; text-align: center; transition: opacity .6s;
-      font: 500 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      cursor: default;
     }
-    #wait.gone { opacity: 0; pointer-events: none; }
-    #wait b { display: block; color: #aab0c4; font-size: 18px; margin-bottom: 4px; }
+    body.cursor-hidden, body.cursor-hidden * {
+      cursor: none !important;
+    }
+    body {
+      display: grid;
+      place-items: center;
+      user-select: none;
+    }
+    canvas {
+      display: block;
+      grid-area: 1 / 1;
+    }
+    #grid {
+      pointer-events: none;
+      display: none;
+    }
+    #wait {
+      grid-area: 1 / 1;
+      z-index: 2;
+      color: #8a90a4;
+      text-align: center;
+      transition: opacity .6s;
+      font: 500 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+      pointer-events: none;
+    }
+    #wait.gone {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #wait b {
+      display: block;
+      color: #d0d6e8;
+      font-size: 20px;
+      margin-bottom: 6px;
+    }
+    #wait p {
+      margin: 6px 0;
+      font-size: 13px;
+      color: #6b7280;
+    }
+
+    .out-toolbar {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 100;
+      display: flex;
+      gap: 8px;
+      opacity: 0;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      transform: translateY(-4px);
+    }
+    body:hover .out-toolbar, .out-toolbar:focus-within {
+      opacity: 0.9;
+      transform: translateY(0);
+    }
+    .out-btn {
+      background: rgba(20, 24, 35, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #e2e8f0;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font: 500 12px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      transition: all 0.15s ease;
+    }
+    .out-btn:hover {
+      background: rgba(45, 55, 72, 0.95);
+      border-color: rgba(255, 255, 255, 0.35);
+      color: #fff;
+    }
+    .out-btn.close:hover {
+      background: rgba(220, 38, 38, 0.9);
+      border-color: rgba(255, 100, 100, 0.5);
+    }
   </style>
 </head>
 <body>
+  <div class="out-toolbar">
+    <button class="out-btn" id="btn-toggle-fs" title="Toggle borderless fullscreen">⛶ Fullscreen</button>
+    <button class="out-btn close" id="btn-close-out" title="Close output window (Esc)">✕ Close</button>
+  </div>
   <canvas id="c"></canvas>
   <canvas id="grid"></canvas>
-  <div id="wait"><b>Lumex Output</b>Waiting for the control window…<br>Double-click for fullscreen · Esc to close.</div>
+  <div id="wait">
+    <b>Lumex Output</b>
+    Waiting for control window…
+    <p>Esc to close · Double-click for fullscreen</p>
+  </div>
   <script type="module" src="js/output.js"></script>
 </body>
 </html>

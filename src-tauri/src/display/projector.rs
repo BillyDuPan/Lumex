@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, Monitor, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, Monitor, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use crate::graphics::context::WgpuContext;
 
 pub const PROJECTOR_WINDOW_LABEL: &str = "projector";
@@ -167,18 +167,28 @@ pub fn create_projector_window<R: Runtime>(
         .cloned()
         .unwrap_or_else(|| format!("Display {}", config.monitor_index + 1));
 
+    let (win_w, win_h, win_x, win_y, decorations, resizable) = if config.borderless_fullscreen {
+        (safe_w as f64, safe_h as f64, pos.x as f64, pos.y as f64, false, false)
+    } else {
+        let w = (safe_w as f64 * 0.75).clamp(800.0, 1440.0);
+        let h = (w * 9.0 / 16.0).clamp(450.0, 900.0);
+        let x = pos.x as f64 + ((safe_w as f64 - w) / 2.0);
+        let y = pos.y as f64 + ((safe_h as f64 - h) / 2.0);
+        (w, h, x, y, true, true)
+    };
+
     let webview_builder = WebviewWindowBuilder::new(
         app,
         PROJECTOR_WINDOW_LABEL,
         WebviewUrl::App("output.html".into()),
     )
     .title(&config.title)
-    .inner_size(safe_w as f64, safe_h as f64)
-    .position(pos.x as f64, pos.y as f64)
-    .decorations(false)
-    .resizable(false)
+    .inner_size(win_w, win_h)
+    .position(win_x, win_y)
+    .decorations(decorations)
+    .resizable(resizable)
     .always_on_top(config.always_on_top)
-    .skip_taskbar(true);
+    .skip_taskbar(false);
 
     let window = webview_builder
         .build()
@@ -193,16 +203,18 @@ pub fn create_projector_window<R: Runtime>(
     let window_arc = Arc::new(window);
     let is_open = Arc::new(AtomicBool::new(true));
     let is_fullscreen = Arc::new(AtomicBool::new(config.borderless_fullscreen));
-    let resolution = Arc::new(Mutex::new((safe_w, safe_h)));
+    let resolution = Arc::new(Mutex::new((win_w as u32, win_h as u32)));
     let surface_mutex = Arc::new(Mutex::new(None));
 
     // Hook lifecycle and resize events
     let is_open_evt = is_open.clone();
     let resolution_evt = resolution.clone();
+    let app_handle = app.clone();
 
     window_arc.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
             is_open_evt.store(false, Ordering::SeqCst);
+            let _ = app_handle.emit("projector:closed", ());
         }
         WindowEvent::Resized(new_size) => {
             if new_size.width > 0 && new_size.height > 0 {

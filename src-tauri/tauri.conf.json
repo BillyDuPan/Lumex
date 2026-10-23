@@ -22,6 +22,20 @@
         "center": true,
         "focus": true,
         "visible": true
+      },
+      {
+        "label": "projector",
+        "title": "Lumex - Output",
+        "url": "output.html",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 640,
+        "minHeight": 360,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "focus": false,
+        "visible": false
       }
     ],
     "security": {
